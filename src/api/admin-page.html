@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helmsman Security — admin</title>
+<style nonce="__NONCE__">
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; color: #e8e8ef; background: #14141a; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
+  table { width: 100%; border-collapse: collapse; } td, th { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #2a2a35; }
+  input, select, button { font: inherit; padding: .3rem .5rem; margin: .15rem; background: #1e1e27; color: inherit; border: 1px solid #3a3a48; border-radius: 6px; }
+  button { cursor: pointer; } .msg { color: #9fd49f; } .err { color: #f19a9a; } code { background: #1e1e27; padding: .1rem .3rem; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>Helmsman Security — admin</h1>
+<p>Holds, exclusions, manual asset links and credentials. Changes here never touch your machines; the engine is read-only.</p>
+<p id="msg" class="msg" role="status"></p>
+
+<h2>Holds and exclusions</h2>
+<table id="holds"><thead><tr><th>Kind</th><th>Asset</th><th>Check / product</th><th>Reason</th><th>Expires</th><th></th></tr></thead><tbody></tbody></table>
+<form id="hold-form">
+  <select name="kind"><option value="exclusion">exclusion</option><option value="hold">hold</option></select>
+  <input name="assetKey" placeholder="asset key, e.g. pve:guest:152" required>
+  <input name="checkId" placeholder="check id (exclusion)">
+  <input name="product" placeholder="product (hold)">
+  <input name="version" placeholder="version (hold)">
+  <input name="reason" placeholder="reason (required)" required>
+  <button>Add</button>
+</form>
+
+<h2>Manual asset links</h2>
+<table id="links"><thead><tr><th>Asset</th><th>Wazuh agent id</th><th></th></tr></thead><tbody></tbody></table>
+<form id="link-form">
+  <input name="assetKey" placeholder="asset key" required>
+  <input name="sourceId" placeholder="Wazuh agent id, e.g. 007" required>
+  <button>Link</button>
+</form>
+
+<h2>Credentials</h2>
+<table id="creds"><thead><tr><th>Name</th><th>Last set</th></tr></thead><tbody></tbody></table>
+<form id="cred-form">
+  <select name="name"><option>proxmox.tokenSecret</option><option>wazuh.password</option></select>
+  <input name="value" type="password" placeholder="value" autocomplete="off" required>
+  <button>Save</button>
+</form>
+<p><button id="rotate">Create a new Helmsman API token</button> <span id="token"></span></p>
+
+<script nonce="__NONCE__">
+const $ = (s) => document.querySelector(s);
+const msg = (t, bad) => { const m = $("#msg"); m.textContent = t; m.className = bad ? "err" : "msg"; };
+async function api(path, method = "GET", body) {
+  const r = await fetch(path, { method, headers: body !== undefined ? { "content-type": "application/json" } : {}, body: body !== undefined ? JSON.stringify(body) : undefined });
+  if (!r.ok && r.status !== 204) { const t = await r.text(); throw new Error(t || r.status); }
+  return r.status === 204 ? null : r.json();
+}
+const cell = (tr, text) => { const td = document.createElement("td"); td.textContent = text ?? ""; tr.append(td); return td; };
+function button(label, onClick) { const b = document.createElement("button"); b.textContent = label; b.addEventListener("click", onClick); return b; }
+async function load() {
+  const holds = (await api("/admin/holds")).items;
+  const hb = $("#holds tbody"); hb.replaceChildren();
+  for (const h of holds) {
+    const tr = document.createElement("tr");
+    cell(tr, h.kind + (h.expired ? " (expired)" : "")); cell(tr, h.assetKey); cell(tr, h.checkId ?? `${h.product} ${h.version}`); cell(tr, h.reason);
+    cell(tr, h.expiresAt ? new Date(h.expiresAt).toLocaleString() : "never");
+    cell(tr, "").append(button("Remove", async () => { await api(`/admin/holds/${h.id}`, "DELETE"); load(); }));
+    hb.append(tr);
+  }
+  const links = (await api("/admin/links")).items;
+  const lb = $("#links tbody"); lb.replaceChildren();
+  for (const l of links) {
+    const tr = document.createElement("tr");
+    cell(tr, l.assetKey); cell(tr, l.sourceId);
+    cell(tr, "").append(button("Remove", async () => { await api(`/admin/links?source=wazuh&sourceId=${encodeURIComponent(l.sourceId)}`, "DELETE"); load(); }));
+    lb.append(tr);
+  }
+  const creds = (await api("/admin/credentials")).items;
+  const cb = $("#creds tbody"); cb.replaceChildren();
+  for (const c of creds) { const tr = document.createElement("tr"); cell(tr, c.name); cell(tr, new Date(c.updatedAt).toLocaleString()); cb.append(tr); }
+}
+$("#hold-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  for (const k of Object.keys(f)) if (!f[k]) delete f[k];
+  try { await api("/admin/holds", "POST", f); e.target.reset(); msg("Saved."); load(); } catch (err) { msg(err.message, true); }
+});
+$("#link-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try { await api("/admin/links", "POST", { ...f, source: "wazuh" }); e.target.reset(); msg("Linked."); load(); } catch (err) { msg(err.message, true); }
+});
+$("#cred-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = Object.fromEntries(new FormData(e.target));
+  try { await api(`/admin/credentials/${encodeURIComponent(f.name)}`, "PUT", { value: f.value }); e.target.reset(); msg("Credential saved."); load(); } catch (err) { msg(err.message, true); }
+});
+$("#rotate").addEventListener("click", async () => {
+  if (!confirm("Helmsman will stop reading the engine until you paste the new token into it. Continue?")) return;
+  try { const { token } = await api("/admin/api-token/rotate", "POST", {}); $("#token").replaceChildren("New token (shown once): ", Object.assign(document.createElement("code"), { textContent: token })); load(); } catch (err) { msg(err.message, true); }
+});
+load().catch((e) => msg(e.message, true));
+</script>
+</body>
+</html>
