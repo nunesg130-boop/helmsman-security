@@ -15,7 +15,10 @@ export function formatAge(ms) {
   return `${Math.round(h / 24)} d`;
 }
 
+export const GLOBAL_KEY = "_global";
+
 export function evidenceKey(asset, kind) {
+  if (kind.startsWith("eol.")) return GLOBAL_KEY;
   if (kind.startsWith("wazuh.")) {
     const id = asset.sources?.wazuh?.id;
     return id ? `wazuh:agent:${id}` : null;
