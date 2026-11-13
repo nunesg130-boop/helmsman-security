@@ -1,0 +1,11 @@
+{
+  "tenant": "default",
+  "listen": { "apiHost": "0.0.0.0", "apiPort": 8443, "adminHost": "0.0.0.0", "adminPort": 8081, "adminAllowIp": "192.168.0.105" },
+  "owner": { "authentikUser": "your-authentik-username", "adminOrigin": "https://security.jellofin.com" },
+  "proxmox": { "baseUrl": "https://192.168.0.10:8006", "tokenId": "helmsec@pve!engine", "certSha256": "<sha256 fingerprint of the Proxmox API certificate>", "backupStorage": "backups" },
+  "wazuh": { "baseUrl": "https://<wazuh-vm-ip>:55000", "user": "helmsec-ro", "certSha256": "<sha256 fingerprint of the Wazuh API certificate>" },
+  "docker": [{ "name": "docker-vm", "baseUrl": "http://192.168.0.109:2375", "assetKey": "pve:guest:109" }],
+  "assets": { "roaming": ["legion", "macbook"], "appliances": ["haos"] },
+  "network": [{ "name": "er605", "ip": "192.168.0.1" }],
+  "thresholds": { "backupMaxAgeDays": 2 }
+}
