@@ -35,7 +35,9 @@ function usable(store, asset, kind, now) {
 }
 
 export function runCheck(check, asset, { store, holds, config, now }) {
-  if (!check.appliesTo(asset, config)) return result("not_applicable", `does not apply to ${asset.class}`);
+  if (!check.appliesTo(asset, config)) {
+    return result("not_applicable", check.notApplicableReason?.(asset) ?? `does not apply to ${asset.class}`);
+  }
   const exclusion = holds?.activeExclusion?.(asset.assetKey, check.id, now);
   if (exclusion) return result("excluded", exclusion.reason);
 
