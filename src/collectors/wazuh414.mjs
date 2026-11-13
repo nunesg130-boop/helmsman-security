@@ -19,9 +19,19 @@ function parseKeepAlive(v) {
   return Number.isFinite(t) ? t : null;
 }
 
+// syscollector scan times come as ISO or "YYYY/MM/DD HH:MM:SS" (UTC).
+export function parseScanTime(v) {
+  if (typeof v !== "string" || !v) return null;
+  let s = v.trim().replace(/^(\d{4})\/(\d{2})\/(\d{2})/u, "$1-$2-$3").replace(" ", "T");
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/u.test(s)) s += "Z";
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
 export function createWazuh414({ http, baseUrl, user, password, certSha256 }) {
   const base = baseUrl.replace(/\/+$/u, "");
   let token = null;
+  const scans = new Map(); // `${id}/${table}` -> newest scan time (ms)
 
   async function login() {
     const body = await http.fetchJson(`${base}${LOGIN}`, {
@@ -56,10 +66,17 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256 }) {
     }
   }
 
-  const sys = (id, table) => all(`/syscollector/${encodeURIComponent(id)}/${table}`);
+  async function sys(id, table) {
+    const items = await all(`/syscollector/${encodeURIComponent(id)}/${table}`);
+    const times = items.map((i) => parseScanTime(i?.scan?.time)).filter((t) => t != null);
+    scans.set(`${id}/${table}`, times.length ? Math.max(...times) : null);
+    return items;
+  }
 
   return {
     version: "4.14",
+    // Newest syscollector scan time seen for (agent, table), or null.
+    scanTime: (id, table) => scans.get(`${id}/${table}`) ?? null,
     async listAgents() {
       return (await all("/agents")).map((a) => ({
         id: String(a.id),

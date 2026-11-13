@@ -1,5 +1,6 @@
 import { result } from "../states.mjs";
 import { compareVersions } from "../version.mjs";
+import { HOST_CLASSES } from "./runner.mjs";
 
 // Debian/Proxmox kernel packages carry the full release in the name, e.g.
 // proxmox-kernel-6.8.12-4-pve-signed, pve-kernel-5.15.108-1-pve,
@@ -25,7 +26,8 @@ export const pendingReboot = {
   id: "pending_reboot",
   title: "No reboot pending",
   requires: ["wazuh.os", "wazuh.packages"],
-  appliesTo: (asset) => ["host", "guest", "roaming"].includes(asset.class) && Boolean(asset.sources?.wazuh),
+  appliesTo: (asset) => HOST_CLASSES.includes(asset.class) && asset.sources?.pve?.type !== "lxc",
+  notApplicableReason: (asset) => (asset.sources?.pve?.type === "lxc" ? "containers run on the host's kernel" : null),
   evaluate({ "wazuh.os": os, "wazuh.packages": pk }) {
     const platform = String(os.value.platform ?? "").toLowerCase();
     if (platform === "darwin" || platform === "macos") return result("not_applicable", "kernel updates not tracked on macOS");

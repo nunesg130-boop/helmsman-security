@@ -32,16 +32,24 @@ test("roaming agent away is unknown and flagged", () => {
   assert.match(r.reason, /^away since /u);
 });
 
-test("agent_connected does not apply without an agent", () => {
-  assert.equal(run(agentConnected, asset("guest", null), memoryStore()).state, "not_applicable");
+test("agent_connected without an agent is unknown, not not_applicable", () => {
+  const r = run(agentConnected, asset("guest", null), memoryStore());
+  assert.deepEqual([r.state, r.reason], ["unknown", "no Wazuh agent installed"]);
 });
 
+const withInventory = () => {
+  const s = memoryStore();
+  putOk(s, "proxmox", [{ assetKey: "_inventory", kind: "inventory.proxmox", value: {} }], NOW);
+  putOk(s, "wazuh", [{ assetKey: "_inventory", kind: "inventory.wazuh", value: {} }], NOW);
+  return s;
+};
+
 test("guest without agent is an issue", () => {
-  const r = run(agentPresent, asset("guest", null), memoryStore());
+  const r = run(agentPresent, asset("guest", null), withInventory());
   assert.deepEqual([r.state, r.reason], ["issue", "no Wazuh agent installed"]);
 });
 
-test("guest with agent is ok", () => assert.equal(run(agentPresent, asset("guest"), memoryStore()).state, "ok"));
+test("guest with agent is ok", () => assert.equal(run(agentPresent, asset("guest"), withInventory()).state, "ok"));
 
 test("appliance is not_applicable with a clear reason", () => {
   const r = run(agentPresent, asset("appliance", null), memoryStore());

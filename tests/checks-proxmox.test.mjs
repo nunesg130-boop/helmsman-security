@@ -16,7 +16,7 @@ function run(check, asset, kind, value, config = CONFIG) {
   putOk(s, "proxmox", [{ assetKey: asset.assetKey, kind, value }], NOW);
   return runCheck(check, asset, { store: s, holds: noHolds, config, now: NOW });
 }
-const disk = (devpath, health, wearout = "N/A") => ({ devpath, model: "X", health, wearout, type: "ssd" });
+const disk = (devpath, health, wearout = "N/A", type = wearout === "N/A" ? "hdd" : "ssd") => ({ devpath, model: "X", health, wearout, type });
 
 test("all disks PASSED is ok", () => assert.equal(run(diskHealth, node, "pve.disks", [disk("/dev/sda", "PASSED", 90), disk("/dev/sdb", "OK")]).state, "ok"));
 test("a FAILED disk is an issue naming it", () => {

@@ -17,8 +17,14 @@ export function formatAge(ms) {
 
 export const GLOBAL_KEY = "_global";
 
+export const INVENTORY_KEY = "_inventory";
+// Machines that should carry a host agent. A missing agent makes their
+// host-level checks unknown, never not_applicable.
+export const HOST_CLASSES = Object.freeze(["host", "guest", "roaming", "appliance"]);
+
 export function evidenceKey(asset, kind) {
   if (kind.startsWith("eol.")) return GLOBAL_KEY;
+  if (kind.startsWith("inventory.")) return INVENTORY_KEY;
   if (kind.startsWith("wazuh.")) {
     const id = asset.sources?.wazuh?.id;
     return id ? `wazuh:agent:${id}` : null;
@@ -44,9 +50,13 @@ export function runCheck(check, asset, { store, holds, config, now }) {
   const exclusion = holds?.activeExclusion?.(asset.assetKey, check.id, now);
   if (exclusion) return result("excluded", exclusion.reason);
 
+  const kinds = typeof check.requires === "function" ? check.requires(asset, config) : check.requires;
+  if (kinds.some((k) => k.startsWith("wazuh.")) && !asset.sources?.wazuh?.id) {
+    return result("unknown", asset.class === "appliance" ? "no agent possible" : "no Wazuh agent installed");
+  }
   const inputs = {};
   const problems = [];
-  for (const kind of check.requires) {
+  for (const kind of kinds) {
     const u = usable(store, asset, kind, now);
     if (u.problem) problems.push(u.problem);
     else inputs[kind] = u.ev;

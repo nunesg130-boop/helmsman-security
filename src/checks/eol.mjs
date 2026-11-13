@@ -1,4 +1,5 @@
 import { result } from "../states.mjs";
+import { HOST_CLASSES } from "./runner.mjs";
 
 export const OS_PRODUCT = Object.freeze({ debian: "debian", ubuntu: "ubuntu", fedora: "fedora", darwin: "macos", macos: "macos" });
 export const DEFAULT_SOFTWARE = Object.freeze([
@@ -30,7 +31,7 @@ export const osEol = {
   id: "os_eol",
   title: "Operating system still supported",
   requires: ["wazuh.os", "eol.dataset"],
-  appliesTo: (asset) => ["host", "guest", "roaming"].includes(asset.class) && Boolean(asset.sources?.wazuh),
+  appliesTo: (asset) => HOST_CLASSES.includes(asset.class),
   evaluate({ "wazuh.os": os, "eol.dataset": ds }, { asset, holds, now }) {
     const product = OS_PRODUCT[String(os.value.platform ?? "").toLowerCase()];
     if (!product) return result("unknown", `OS ${os.value.name ?? os.value.platform ?? "?"} not tracked by endoflife.date`);
@@ -50,7 +51,7 @@ export const softwareEol = {
   id: "software_eol",
   title: "Tracked software still supported",
   requires: ["wazuh.packages", "eol.dataset"],
-  appliesTo: (asset) => ["host", "guest", "roaming"].includes(asset.class) && Boolean(asset.sources?.wazuh),
+  appliesTo: (asset) => HOST_CLASSES.includes(asset.class),
   evaluate({ "wazuh.packages": pk, "eol.dataset": ds }, { asset, holds, config, now }) {
     if (pk.value.scanned === false) return result("unknown", "no inventory yet");
     const tracked = config?.eol?.software ?? DEFAULT_SOFTWARE;

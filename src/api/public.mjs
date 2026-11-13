@@ -23,7 +23,7 @@ function paginate(items, url) {
   return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: items.length };
 }
 
-export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version }) {
+export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, now = Date.now }) {
   const ledger = new LedgerStore(db, tenantId);
 
   function authorized(req) {
@@ -38,23 +38,53 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
     return r ? { assetKey: r.asset_key, class: r.class, name: r.name, sources: JSON.parse(r.sources_json), ambiguousReason: r.ambiguous_reason, lastSeenAt: r.last_seen_at } : null;
   }
 
-  const brief = (r) => ({ assetKey: r.assetKey, assetName: r.assetName, checkId: r.checkId, reason: r.reason, since: r.stateSince });
+  const brief = (r) => ({ assetKey: r.assetKey, assetName: r.assetName, checkId: r.checkId, reason: r.reason, since: r.stateSince, evaluatedAt: r.evaluatedAt });
+
+  // A result is only as good as the cycle that produced it. If the engine
+  // stopped re-evaluating (stuck collector, crash loop), old results are
+  // served as unknown rather than as whatever they last were.
+  function aged(rows) {
+    const t = now();
+    return rows.map((r) => (t - r.evaluatedAt > staleAfterMs
+      ? { ...r, state: "unknown", reason: `not re-evaluated since ${new Date(r.evaluatedAt).toISOString()} (engine cycle stalled); last result: ${r.state}`, roaming: false }
+      : r));
+  }
+  const rowsNow = () => aged(ledger.all());
+  function countsOf(rows) {
+    const c = Object.fromEntries(STATE_KEYS.map((k) => [k, 0]));
+    let roamingAway = 0;
+    for (const r of rows) {
+      if (r.state === "unknown" && r.roaming) roamingAway += 1;
+      else c[r.state] += 1;
+    }
+    return { counts: c, roamingAway };
+  }
+  const lastCycleAt = () => db.prepare("SELECT MAX(evaluated_at) AS t FROM ledger WHERE tenant_id = ?").get(tenantId)?.t ?? null;
+  function evidenceView(ev) {
+    if (!ev) return { items: [], collectedAt: null, stale: true };
+    return { items: ev.value ?? [], collectedAt: ev.collectedAt, stale: now() - ev.collectedAt > ev.staleAfterMs || ev.collectedAt > now() + 60_000 };
+  }
 
   const routes = {
-    "/api/v1/health": () => [200, { ok: true, version }],
+    "/api/v1/health": () => {
+      const last = lastCycleAt();
+      if (last == null) return [200, { ok: false, version, lastCycleAt: null, reason: "no completed cycle yet" }];
+      if (now() - last > staleAfterMs) return [200, { ok: false, version, lastCycleAt: last, reason: `engine stalled: last cycle ${new Date(last).toISOString()}` }];
+      return [200, { ok: true, version, lastCycleAt: last }];
+    },
     "/api/v1/summary": () => {
-      const { roamingAway, ...counts } = ledger.counts();
+      const { counts, roamingAway } = countsOf(rowsNow());
       const collectors = store.collectors().map((name) => {
         const r = store.lastRun(name);
         return { name, status: r.status, lastSuccessAt: r.lastSuccessAt, lastError: r.status === "failed" ? r.error : null, warnings: r.warnings };
       });
-      return [200, { engine: { version, now: Date.now() }, counts, roamingAway, collectors }];
+      return [200, { engine: { version, now: now(), lastCycleAt: lastCycleAt() }, counts, roamingAway, collectors }];
     },
-    "/api/v1/issues": (url) => [200, paginate(ledger.issues().map(brief), url)],
-    "/api/v1/unknowns": (url) => [200, paginate(ledger.unknowns().map((r) => ({ ...brief(r), roaming: r.roaming })), url)],
+    "/api/v1/issues": (url) => [200, paginate(rowsNow().filter((r) => r.state === "issue").map(brief), url)],
+    "/api/v1/unknowns": (url) => [200, paginate(rowsNow().filter((r) => r.state === "unknown").map((r) => ({ ...brief(r), roaming: r.roaming })), url)],
     "/api/v1/assets": (url) => {
       const counts = new Map();
-      for (const r of ledger.all()) {
+      for (const r of rowsNow()) {
         if (!counts.has(r.assetKey)) counts.set(r.assetKey, Object.fromEntries(STATE_KEYS.map((k) => [k, 0])));
         counts.get(r.assetKey)[r.state] += 1;
       }
@@ -72,12 +102,13 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
     const items = pk?.value?.items ?? [];
     return [200, {
       asset: a,
-      checks: ledger.forAsset(key),
+      checks: aged(ledger.forAsset(key)),
       software: items.slice(0, MAX_SOFTWARE).map((p) => ({ name: p.name, version: p.version })),
       softwareTruncated: items.length > MAX_SOFTWARE,
       softwareCollectedAt: pk?.collectedAt ?? null,
-      ports: ev("wazuh.ports")?.value ?? [],
-      containers: ev("docker.containers")?.value ?? []
+      softwareStale: evidenceView(pk).stale,
+      ports: evidenceView(ev("wazuh.ports")),
+      containers: evidenceView(ev("docker.containers"))
     }];
   }
 

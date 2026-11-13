@@ -15,7 +15,8 @@ export const backupJobs = {
     else if (now - b.newestBackupAt > threshold(config, "backupMaxAgeDays") * 86400_000) problems.push(`last backup ${formatAge(now - b.newestBackupAt)} ago`);
     if (b.lastTask && String(b.lastTask.status).toUpperCase() !== "OK") problems.push(`last backup task: ${b.lastTask.status}`);
     if (problems.length) return result("issue", problems.join("; "));
-    return result("ok", `last backup ${formatAge(now - b.newestBackupAt)} ago`);
+    const note = b.lastTaskAttribution === "ambiguous" ? " (last job result not attributable: several backup jobs run on this node)" : "";
+    return result("ok", `last backup ${formatAge(now - b.newestBackupAt)} ago${note}`);
   }
 };
 

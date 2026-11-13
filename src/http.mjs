@@ -19,13 +19,20 @@ const normFp = (fp) => String(fp ?? "").replace(/:/gu, "").toLowerCase();
 // An agent whose connections are verified against a pinned SHA-256
 // fingerprint BEFORE the socket is handed to the request, so no header
 // (and no credential) is ever written to an unverified peer.
-function pinnedAgent(pin) {
+function pinnedAgent(pin, timeoutMs) {
   const agent = new https.Agent({ keepAlive: false });
   agent.createConnection = (options, oncreate) => {
     const socket = tls.connect({ ...options, rejectUnauthorized: false });
     let done = false;
     const finish = (err, s) => { if (!done) { done = true; oncreate(err, s); } };
+    // The request's own timeout only starts once it has the socket, so the
+    // TCP connect + TLS handshake needs its own limit.
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy();
+      finish(new CollectorError("timeout", `no TLS handshake within ${timeoutMs} ms`));
+    });
     socket.once("secureConnect", () => {
+      socket.setTimeout(0);
       const fp = normFp(socket.getPeerCertificate()?.fingerprint256);
       if (fp !== pin) {
         socket.destroy();
@@ -42,7 +49,7 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
   const httpsHosts = new Set(allowHosts.map((h) => h.toLowerCase()));
   const plainHosts = new Set(allowHttpHosts.map((h) => h.toLowerCase()));
 
-  function fetchJson(url, { method = "GET", headers = {}, body, timeoutMs = 10_000, maxBytes = 5_000_000, certSha256 } = {}) {
+  function fetchJson(url, { method = "GET", headers = {}, body, timeoutMs = 10_000, deadlineMs = timeoutMs * 3, maxBytes = 5_000_000, certSha256 } = {}) {
     return new Promise((resolve, reject) => {
       let u;
       try { u = new URL(url); } catch { return reject(new CollectorError("egress_denied", "invalid URL")); }
@@ -56,11 +63,12 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
       const lib = u.protocol === "https:" ? https : http;
       const opts = { method, headers: { accept: "application/json", ...headers } };
       if (u.protocol === "https:") {
-        if (certSha256) opts.agent = pinnedAgent(normFp(certSha256));
+        if (certSha256) opts.agent = pinnedAgent(normFp(certSha256), timeoutMs);
         else opts.rejectUnauthorized = true;
       }
       let settled = false;
-      const fail = (e) => { if (!settled) { settled = true; reject(e); } };
+      let deadline = null;
+      const fail = (e) => { if (!settled) { settled = true; clearTimeout(deadline); reject(e); } };
       const req = lib.request(u, opts, (res) => {
         const status = res.statusCode ?? 0;
         if (status === 401 || status === 403) { res.resume(); return fail(new CollectorError("auth", `HTTP ${status}`)); }
@@ -76,14 +84,18 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
           if (settled) return;
           try {
             settled = true;
+            clearTimeout(deadline);
             resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
           } catch {
+            clearTimeout(deadline);
             reject(new CollectorError("parse", "response was not valid JSON"));
           }
         });
         res.on("error", (e) => fail(new CollectorError("network", e.message)));
       });
       req.setTimeout(timeoutMs, () => { req.destroy(); fail(new CollectorError("timeout", `no answer within ${timeoutMs} ms`)); });
+      // Overall limit, so a server trickling bytes can't hold a run forever.
+      deadline = setTimeout(() => { req.destroy(); fail(new CollectorError("timeout", `request took longer than ${deadlineMs} ms`)); }, deadlineMs);
       req.on("error", (e) => {
         if (e instanceof CollectorError) return fail(e);
         const code = /certificate|self[- ]signed|SSL|TLS/iu.test(`${e.code} ${e.message}`) ? "tls" : "network";

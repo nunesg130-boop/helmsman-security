@@ -2,8 +2,7 @@ import { runCollector } from "./collect.mjs";
 import { linkAssets } from "./identity.mjs";
 import { evaluateAll } from "./ledger.mjs";
 import { threshold } from "./checks/thresholds.mjs";
-
-const INVENTORY_KEY = "_inventory";
+import { INVENTORY_KEY } from "./checks/runner.mjs";
 
 function staleAfterMs(config) {
   return threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
@@ -20,7 +19,7 @@ export async function collectionCycle({ db, tenantId, store, holds, ledger, conf
     const r = await runCollector(store, name, async () => {
       const out = await fn();
       const evidence = [...(out.evidence ?? [])];
-      if (out.inventory) evidence.push({ assetKey: INVENTORY_KEY, kind: `inventory.${name}`, source: name, value: out.inventory, staleAfterMs: Number.MAX_SAFE_INTEGER });
+      if (out.inventory) evidence.push({ assetKey: INVENTORY_KEY, kind: `inventory.${name}`, source: name, value: out.inventory });
       return { evidence: evidence.map((e) => ({ source: name, ...e })), warnings: out.warnings };
     }, { now, staleAfterMs: stale, secrets });
     statuses[name] = r.status;

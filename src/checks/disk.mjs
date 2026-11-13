@@ -22,7 +22,12 @@ export const diskHealth = {
       const health = String(d.health ?? "").toUpperCase();
       if (!health || health === "UNKNOWN") unknown.push(`${d.devpath}: SMART health not reported`);
       else if (!GOOD.has(health)) bad.push(`${d.devpath}: SMART ${d.health}`);
-      if (typeof d.wearout === "number" && d.wearout <= minLife) bad.push(`${d.devpath}: ${d.wearout}% life left`);
+      const wear = d.wearout === null || d.wearout === "" ? NaN : Number(d.wearout);
+      if (Number.isFinite(wear)) {
+        if (wear <= minLife) bad.push(`${d.devpath}: ${wear}% life left`);
+      } else if (["ssd", "nvme"].includes(String(d.type ?? "").toLowerCase())) {
+        unknown.push(`${d.devpath}: SSD wear not reported`);
+      }
     }
     if (bad.length) return result("issue", bad.join("; "));
     if (unknown.length) return result("unknown", unknown.join("; "));

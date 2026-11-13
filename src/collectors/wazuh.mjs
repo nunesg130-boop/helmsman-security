@@ -21,13 +21,22 @@ export async function collectWazuh({ adapter, now = Date.now }) {
     evidence.push({ assetKey: key, kind: "wazuh.agent", value: agent, collectedAt: t });
     let macs = [];
     if (agent.status !== "never_connected") {
-      const inventoryAt = agent.status === "active" ? t : Math.min(t, agent.lastKeepAlive ?? 0);
+      // Active agent: as fresh as now. Otherwise: its last check-in, unless
+      // that is in the future (clock trouble), which counts as unknown age.
+      const keepAlive = agent.lastKeepAlive != null && agent.lastKeepAlive <= t ? agent.lastKeepAlive : 0;
+      const baseAt = agent.status === "active" ? t : keepAlive;
+      // ...and never newer than the last syscollector scan, if Wazuh says.
+      const datedAt = (method) => {
+        const scan = adapter.scanTime?.(agent.id, method);
+        if (scan == null) return baseAt;
+        return scan > t ? 0 : Math.min(baseAt, scan);
+      };
       try {
         const got = {};
         for (const [method] of KINDS) got[method] = await adapter[method](agent.id);
         macs = (await adapter.netiface(agent.id)).macs;
         for (const [method, kind] of KINDS) {
-          if (got[method] != null) evidence.push({ assetKey: key, kind, value: got[method], collectedAt: inventoryAt });
+          if (got[method] != null) evidence.push({ assetKey: key, kind, value: got[method], collectedAt: datedAt(method) });
         }
       } catch (error) {
         if (error.code === "auth") throw error;

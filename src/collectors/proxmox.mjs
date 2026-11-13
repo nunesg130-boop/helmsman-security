@@ -44,7 +44,7 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
   }
 
   const newestBackup = new Map();
-  const tasksByNode = new Map();
+  const tasksByNode = new Map(); // only nodes whose backup data was fully read
   for (const node of nodes) {
     const key = `pve:node:${node.name}`;
     if (!node.online) { warnings.push(`node ${node.name} is offline`); continue; }
@@ -64,7 +64,8 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
           if (Number.isFinite(vmid) && Number.isFinite(t) && t > (newestBackup.get(vmid) ?? -Infinity)) newestBackup.set(vmid, t);
         }
       }
-      tasksByNode.set(node.name, ((await get(`/nodes/${node.name}/tasks?typefilter=vzdump&limit=50`)) ?? []).filter((t) => t.type === "vzdump" && t.endtime));
+      const tasks = ((await get(`/nodes/${node.name}/tasks?typefilter=vzdump&limit=50`)) ?? []).filter((t) => t.type === "vzdump" && t.endtime);
+      tasksByNode.set(node.name, tasks);
     } catch (error) {
       if (isAuth(error)) throw error;
       warnings.push(`node ${node.name}: ${error.code ?? "error"} ${error.message}`);
@@ -87,6 +88,12 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
     }
     guests.push({ vmid, type: r.type, name: r.name, node: r.node, ...net });
 
+    // Without this node's task list we can't say whether last night's job
+    // failed, so the guest gets no backup evidence (it reads unknown).
+    if (!tasksByNode.has(r.node)) {
+      evidence.push({ assetKey: `pve:guest:${vmid}`, kind: "pve.guest", value: { name: r.name, node: r.node, type: r.type, status: r.status } });
+      continue;
+    }
     const covered = jobs.some((j) => {
       if (Number(j.enabled ?? 1) === 0) return false;
       if (j.node && j.node !== r.node) return false;
@@ -94,10 +101,18 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
       if (j.pool) return poolMembers.get(j.pool)?.has(vmid) ?? false;
       return parseIdList(j.vmid).has(vmid);
     });
-    const tasks = tasksByNode.get(r.node) ?? [];
+    const tasks = tasksByNode.get(r.node);
     const byId = tasks.filter((t) => String(t.id) === String(vmid)).sort((a, b) => b.endtime - a.endtime)[0];
     const jobLevel = tasks.filter((t) => !t.id).sort((a, b) => b.endtime - a.endtime)[0];
-    const last = byId ?? jobLevel ?? null;
+    // A job-level task only names a node, not a job. Attribute it to this
+    // guest only when exactly one enabled job can run on this node.
+    const jobsOnNode = jobs.filter((j) => Number(j.enabled ?? 1) !== 0 && (!j.node || j.node === r.node));
+    let last = byId ?? null;
+    let attribution = byId ? "guest" : "none";
+    if (!byId && jobLevel) {
+      if (jobsOnNode.length === 1) { last = jobLevel; attribution = "job"; }
+      else attribution = "ambiguous";
+    }
     evidence.push({
       assetKey: `pve:guest:${vmid}`,
       kind: "pve.backups",
@@ -105,7 +120,8 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
         coveredByJob: covered,
         jobIds: jobs.filter((j) => Number(j.enabled ?? 1) !== 0).map((j) => j.id),
         newestBackupAt: newestBackup.get(vmid) ?? null,
-        lastTask: last ? { status: last.status, endtime: Number(last.endtime) * 1000 } : null
+        lastTask: last ? { status: last.status, endtime: Number(last.endtime) * 1000 } : null,
+        lastTaskAttribution: attribution
       }
     });
     evidence.push({ assetKey: `pve:guest:${vmid}`, kind: "pve.guest", value: { name: r.name, node: r.node, type: r.type, status: r.status } });

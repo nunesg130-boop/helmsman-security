@@ -1,11 +1,11 @@
 import { result } from "../states.mjs";
-import { formatAge } from "./runner.mjs";
+import { formatAge, HOST_CLASSES } from "./runner.mjs";
 
 export const agentConnected = {
   id: "agent_connected",
   title: "Wazuh agent connected",
   requires: ["wazuh.agent"],
-  appliesTo: (asset) => ["host", "guest", "roaming"].includes(asset.class) && Boolean(asset.sources?.wazuh),
+  appliesTo: (asset) => HOST_CLASSES.includes(asset.class),
   evaluate({ "wazuh.agent": ev }, { asset, now }) {
     const { status, lastKeepAlive } = ev.value;
     if (status === "active") return result("ok", "agent connected");
@@ -21,7 +21,9 @@ export const agentConnected = {
 export const agentPresent = {
   id: "agent_present",
   title: "Wazuh agent installed",
-  requires: [],
+  // Judged against the inventories it was linked from, so it can't stay
+  // "ok" once those stop being refreshed.
+  requires: (asset) => [...(asset.sources?.pve ? ["inventory.proxmox"] : []), "inventory.wazuh"],
   appliesTo: (asset) => ["host", "guest"].includes(asset.class),
   notApplicableReason: (asset) => (asset.class === "appliance" ? "no agent possible" : null),
   evaluate(_inputs, { asset }) {

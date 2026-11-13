@@ -17,13 +17,13 @@ async function setup() {
   const store = new EvidenceStore(db, "default");
   const credentials = new CredentialStore(db, "default", createSecretBox(randomBytes(32)));
   credentials.set("api.readToken", TOKEN, 1);
-  db.prepare("INSERT INTO assets (tenant_id, asset_key, class, name, sources_json, last_seen_at) VALUES ('default','pve:guest:109','guest','docker','{\"wazuh\":{\"id\":\"003\"}}',1), ('default','wazuh:agent:010','roaming','legion','{}',1)").run();
+  db.prepare("INSERT INTO assets (tenant_id, asset_key, class, name, sources_json, last_seen_at) VALUES ('default','pve:guest:109','guest','docker','{\"wazuh\":{\"id\":\"003\"}}',?), ('default','wazuh:agent:010','roaming','legion','{}',?)").run(Date.now(), Date.now());
   new LedgerStore(db, "default").write([
     { assetKey: "pve:guest:109", checkId: "agent_connected", state: "ok", reason: "agent connected", evidence: [], roaming: false },
     { assetKey: "pve:guest:109", checkId: "os_eol", state: "issue", reason: "debian 11 reached end of life", evidence: [], roaming: false },
     { assetKey: "pve:guest:109", checkId: "disk_health", state: "unknown", reason: "no pve.disks evidence", evidence: [], roaming: false },
     { assetKey: "wazuh:agent:010", checkId: "agent_connected", state: "unknown", reason: "away since x", evidence: [], roaming: true }
-  ], 1000);
+  ], Date.now());
   const run = store.beginRun("proxmox", 1);
   store.finishRun(run, "failed", { error: "auth: HTTP 401" }, 2);
   const w = store.beginRun("wazuh", 1);
@@ -54,7 +54,11 @@ test("public API behaviour", async (t) => {
   await t.test("wrong token 401", async () => assert.equal((await req(srv.port, "/api/v1/summary", { token: "nope" })).status, 401));
   await t.test("unknown path 404", async () => assert.equal((await req(srv.port, "/api/v1/nothing")).status, 404));
 
-  await t.test("health", async () => assert.deepEqual((await req(srv.port, "/api/v1/health")).body, { ok: true, version: "0.1.0" }));
+  await t.test("health", async () => {
+    const h = (await req(srv.port, "/api/v1/health")).body;
+    assert.deepEqual([h.ok, h.version], [true, "0.1.0"]);
+    assert.ok(h.lastCycleAt > 0);
+  });
 
   await t.test("summary counts exclude roaming unknowns and show collector errors redacted", async () => {
     const r = await req(srv.port, "/api/v1/summary");

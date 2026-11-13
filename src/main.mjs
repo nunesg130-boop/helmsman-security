@@ -96,7 +96,8 @@ export async function start({
     fetchEol: () => collectEolDataset({ fetchJson: (u) => http.fetchJson(u, eolCertSha256 ? { certSha256: eolCertSha256 } : {}), products: config.eol.products, now, maxAgeMs: threshold(config, "eolMaxAgeDays") * 86400_000, base: eolBase })
   });
 
-  const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION });
+  const cycleStaleMs = threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
+  const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION, staleAfterMs: cycleStaleMs, now });
   const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now });
   log(`API listening on ${config.listen.apiHost}:${api.port}; admin on ${config.listen.adminHost}:${admin.port} (only from ${config.listen.adminAllowIp}).`);
 
