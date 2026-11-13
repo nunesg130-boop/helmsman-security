@@ -1,0 +1,23 @@
+{
+ "schema_version": "1.2.0",
+ "result": {
+  "name": "fedora",
+  "releases": [
+   {
+    "name": "43",
+    "isEol": false,
+    "eolFrom": "2026-12-09"
+   },
+   {
+    "name": "42",
+    "isEol": false,
+    "eolFrom": "2026-05-13"
+   },
+   {
+    "name": "41",
+    "isEol": true,
+    "eolFrom": "2025-12-15"
+   }
+  ]
+ }
+}

@@ -1,0 +1,23 @@
+{
+ "schema_version": "1.2.0",
+ "result": {
+  "name": "ubuntu",
+  "releases": [
+   {
+    "name": "24.04",
+    "isEol": false,
+    "eolFrom": "2029-05-31"
+   },
+   {
+    "name": "22.04",
+    "isEol": false,
+    "eolFrom": "2027-06-01"
+   },
+   {
+    "name": "20.04",
+    "isEol": true,
+    "eolFrom": "2025-05-29"
+   }
+  ]
+ }
+}

@@ -1,0 +1,23 @@
+{
+ "schema_version": "1.2.0",
+ "result": {
+  "name": "docker-engine",
+  "releases": [
+   {
+    "name": "28",
+    "isEol": false,
+    "eolFrom": null
+   },
+   {
+    "name": "27",
+    "isEol": false,
+    "eolFrom": "2026-01-01"
+   },
+   {
+    "name": "26",
+    "isEol": true,
+    "eolFrom": "2024-12-01"
+   }
+  ]
+ }
+}
