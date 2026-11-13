@@ -3,12 +3,12 @@
 // fine when we simply didn't get their data.
 export const EOL_BASE = "https://endoflife.date/api/v1/products/";
 
-export async function collectEolDataset({ fetchJson, products, now = Date.now, maxAgeMs }) {
+export async function collectEolDataset({ fetchJson, products, now = Date.now, maxAgeMs, base = EOL_BASE }) {
   const out = {};
   for (const slug of products) {
     let body;
     try {
-      body = await fetchJson(`${EOL_BASE}${encodeURIComponent(slug)}`);
+      body = await fetchJson(`${base}${encodeURIComponent(slug)}`);
     } catch (error) {
       throw Object.assign(new Error(`endoflife.date ${slug}: ${error.message}`), { code: error.code });
     }

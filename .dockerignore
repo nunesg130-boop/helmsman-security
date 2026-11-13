@@ -1,0 +1,10 @@
+.git
+.github
+.superpowers
+docs
+tests
+scripts
+node_modules
+*.db
+*.db-*
+config.json
