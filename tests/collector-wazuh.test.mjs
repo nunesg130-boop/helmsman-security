@@ -99,3 +99,17 @@ test("per-agent syscollector failure is a warning", async () => {
     assert.equal(ev(out, "wazuh:agent:001", "wazuh.packages"), undefined);
   });
 });
+
+test("os and hardware are fetched without paging parameters (Wazuh rejects them with 400)", async () => {
+  const strict = (body) => (req) => (/[?&](limit|offset)=/u.test(req.url) ? [400, { title: "Bad Request", detail: "unknown parameter" }] : [200, body]);
+  const routes = wazuhRoutes({
+    "/syscollector/001/os": strict(page([{ os: { name: "Debian GNU/Linux", major: "13", minor: "1", platform: "debian" }, release: "6.14.8-2-pve" }])),
+    "/syscollector/001/hardware": strict(page([{ cpu: { name: "Intel i5-11600", cores: 6 }, ram: { total: 1 } }]))
+  });
+  await withAdapter(routes, async (a, srv) => {
+    assert.equal((await a.os("001")).major, "13");
+    assert.equal((await a.hardware("001")).cores, 6);
+    const urls = srv.requests.map((r) => r.url).filter((u) => /\/(os|hardware)/u.test(u));
+    assert.ok(urls.length === 2 && urls.every((u) => !/limit|offset/u.test(u)), urls.join(", "));
+  });
+});
