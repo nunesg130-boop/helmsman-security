@@ -44,8 +44,15 @@ export async function collectionCycle({ db, tenantId, store, holds, ledger, conf
      ON CONFLICT (tenant_id, asset_key) DO UPDATE SET class = excluded.class, name = excluded.name, sources_json = excluded.sources_json,
        ambiguous_reason = excluded.ambiguous_reason, last_seen_at = excluded.last_seen_at`
   );
+  // An agent that is now linked to a Proxmox machine no longer needs its
+  // stand-alone asset from a run when Proxmox wasn't readable.
+  const linkedAgents = assets.filter((a) => !a.assetKey.startsWith("wazuh:agent:") && a.sources?.wazuh?.id).map((a) => `wazuh:agent:${a.sources.wazuh.id}`);
   db.exec("BEGIN IMMEDIATE");
   try {
+    for (const key of linkedAgents) {
+      db.prepare("DELETE FROM ledger WHERE tenant_id = ? AND asset_key = ?").run(tenantId, key);
+      db.prepare("DELETE FROM assets WHERE tenant_id = ? AND asset_key = ?").run(tenantId, key);
+    }
     for (const a of assets) upsert.run(tenantId, a.assetKey, a.class, a.name, JSON.stringify(a.sources ?? {}), a.ambiguous ? a.ambiguousReason : null, t);
     db.exec("COMMIT");
   } catch (e) { db.exec("ROLLBACK"); throw e; }

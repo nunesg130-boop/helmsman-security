@@ -18,6 +18,27 @@ export function parseNet(config) {
   return { macs, ips };
 }
 
+// vzdump job logs name every guest they back up:
+//   INFO: Finished Backup of VM 109 (00:01:02)
+//   ERROR: Backup of VM 100 failed - no space left on device
+// A read-only (PVEAuditor) token can read these logs, while Proxmox hides
+// the backup files themselves from it. So logs are the backup evidence.
+const FINISHED = /Finished Backup of VM (\d+)\b/u;
+const FAILED = /Backup of VM (\d+) failed(?:\s*-\s*(.*))?$/u;
+const MAX_TASK_LOGS = 20;
+
+export function parseVzdumpLog(lines) {
+  const out = new Map(); // vmid -> { ok: boolean, message }
+  for (const { t } of lines ?? []) {
+    const line = String(t ?? "");
+    const f = FINISHED.exec(line);
+    if (f) { out.set(Number(f[1]), { ok: true, message: null }); continue; }
+    const e = FAILED.exec(line);
+    if (e) out.set(Number(e[1]), { ok: false, message: (e[2] ?? "").trim() || "failed" });
+  }
+  return out;
+}
+
 function parseIdList(s) {
   return new Set(String(s ?? "").split(/[,\s]+/u).filter(Boolean).map((x) => Number(x)));
 }
@@ -43,8 +64,13 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
     }
   }
 
-  const newestBackup = new Map();
-  const tasksByNode = new Map(); // only nodes whose backup data was fully read
+  const newestBackup = new Map(); // vmid -> ms of newest successful backup
+  const lastResult = new Map(); // vmid -> { status, endtime } of newest attempt
+  const nodesRead = new Set(); // nodes whose backup logs were fully read
+  const noteBackup = (vmid, ok, message, endtime) => {
+    if (ok && endtime > (newestBackup.get(vmid) ?? -Infinity)) newestBackup.set(vmid, endtime);
+    if (endtime > (lastResult.get(vmid)?.endtime ?? -Infinity)) lastResult.set(vmid, { status: ok ? "OK" : `failed: ${message}`, endtime });
+  };
   for (const node of nodes) {
     const key = `pve:node:${node.name}`;
     if (!node.online) { warnings.push(`node ${node.name} is offline`); continue; }
@@ -58,14 +84,22 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
       evidence.push({ assetKey: key, kind: "pve.storage", value: storage.map((s) => ({ storage: s.storage, active: s.active, enabled: s.enabled ?? 1, used: s.used, total: s.total, shared: s.shared })) });
       if (cfg.backupStorage && storage.some((s) => s.storage === cfg.backupStorage && Number(s.active) === 1)) {
         const content = (await get(`/nodes/${node.name}/storage/${encodeURIComponent(cfg.backupStorage)}/content?content=backup`)) ?? [];
+        // Usually empty for a read-only token; counted when Proxmox shows it.
         for (const c of content) {
           const vmid = Number(c.vmid);
           const t = Number(c.ctime) * 1000;
           if (Number.isFinite(vmid) && Number.isFinite(t) && t > (newestBackup.get(vmid) ?? -Infinity)) newestBackup.set(vmid, t);
         }
       }
-      const tasks = ((await get(`/nodes/${node.name}/tasks?typefilter=vzdump&limit=50`)) ?? []).filter((t) => t.type === "vzdump" && t.endtime);
-      tasksByNode.set(node.name, tasks);
+      const tasks = ((await get(`/nodes/${node.name}/tasks?typefilter=vzdump&limit=50`)) ?? [])
+        .filter((t) => t.type === "vzdump" && t.endtime && t.upid)
+        .sort((a, b) => b.endtime - a.endtime)
+        .slice(0, MAX_TASK_LOGS);
+      for (const task of tasks) {
+        const lines = await get(`/nodes/${node.name}/tasks/${encodeURIComponent(task.upid)}/log?limit=10000`);
+        for (const [vmid, r] of parseVzdumpLog(lines)) noteBackup(vmid, r.ok, r.message, Number(task.endtime) * 1000);
+      }
+      nodesRead.add(node.name);
     } catch (error) {
       if (isAuth(error)) throw error;
       warnings.push(`node ${node.name}: ${error.code ?? "error"} ${error.message}`);
@@ -88,9 +122,9 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
     }
     guests.push({ vmid, type: r.type, name: r.name, node: r.node, ...net });
 
-    // Without this node's task list we can't say whether last night's job
+    // Without this node's backup logs we can't say whether last night's job
     // failed, so the guest gets no backup evidence (it reads unknown).
-    if (!tasksByNode.has(r.node)) {
+    if (!nodesRead.has(r.node)) {
       evidence.push({ assetKey: `pve:guest:${vmid}`, kind: "pve.guest", value: { name: r.name, node: r.node, type: r.type, status: r.status } });
       continue;
     }
@@ -101,18 +135,7 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
       if (j.pool) return poolMembers.get(j.pool)?.has(vmid) ?? false;
       return parseIdList(j.vmid).has(vmid);
     });
-    const tasks = tasksByNode.get(r.node);
-    const byId = tasks.filter((t) => String(t.id) === String(vmid)).sort((a, b) => b.endtime - a.endtime)[0];
-    const jobLevel = tasks.filter((t) => !t.id).sort((a, b) => b.endtime - a.endtime)[0];
-    // A job-level task only names a node, not a job. Attribute it to this
-    // guest only when exactly one enabled job can run on this node.
-    const jobsOnNode = jobs.filter((j) => Number(j.enabled ?? 1) !== 0 && (!j.node || j.node === r.node));
-    let last = byId ?? null;
-    let attribution = byId ? "guest" : "none";
-    if (!byId && jobLevel) {
-      if (jobsOnNode.length === 1) { last = jobLevel; attribution = "job"; }
-      else attribution = "ambiguous";
-    }
+    const last = lastResult.get(vmid) ?? null;
     evidence.push({
       assetKey: `pve:guest:${vmid}`,
       kind: "pve.backups",
@@ -120,8 +143,8 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
         coveredByJob: covered,
         jobIds: jobs.filter((j) => Number(j.enabled ?? 1) !== 0).map((j) => j.id),
         newestBackupAt: newestBackup.get(vmid) ?? null,
-        lastTask: last ? { status: last.status, endtime: Number(last.endtime) * 1000 } : null,
-        lastTaskAttribution: attribution
+        lastTask: last,
+        lastTaskAttribution: last ? "log" : "none"
       }
     });
     evidence.push({ assetKey: `pve:guest:${vmid}`, kind: "pve.guest", value: { name: r.name, node: r.node, type: r.type, status: r.status } });

@@ -158,12 +158,10 @@ test("I3: guests on a node whose task list can't be read get no backup evidence"
   assert.ok(backupsOf(out, 100));
 });
 
-test("I4: a job-level task is not attributed when several jobs cover the node", async () => {
+test("I4: with several jobs on a node, a guest's result still comes from its own log lines", async () => {
   const jobs = { data: [{ id: "daily", enabled: 1, all: 1, storage: "backups" }, { id: "weekly", enabled: 1, vmid: "200", storage: "backups" }] };
-  const out = await pveCollect({ "/api2/json/cluster/backup": jobs, "/api2/json/nodes/main/tasks": { data: [{ type: "vzdump", id: "", status: "OK", endtime: T - 100 }] } });
-  const b = backupsOf(out, 100);
-  assert.equal(b.lastTask, null);
-  assert.equal(b.lastTaskAttribution, "ambiguous");
+  const out = await pveCollect({ "/api2/json/cluster/backup": jobs });
+  assert.equal(backupsOf(out, 100).lastTask.status, "failed: no space left on device");
 });
 
 test("I4: the backup check says when the last job result couldn't be attributed", () => {
@@ -184,15 +182,16 @@ test("I5: an SSD that doesn't report wear is unknown; numeric strings parse", ()
 });
 
 // I6 ----------------------------------------------------------------------
-test("I6: inventory from an active agent is dated at its last syscollector scan", async () => {
-  const old = "2026-10-01T00:00:00Z";
-  const routes = wazuhRoutes({ "/syscollector/001/packages": page([{ name: "bash", version: "5", scan: { id: 0, time: old } }]) });
+test("I6 (revised): an active agent's inventory is current even when unchanged items carry an old scan time", async () => {
+  // Wazuh only rewrites an item's scan time when the item changes, so an
+  // unchanged package list keeps its first scan time forever.
+  const routes = wazuhRoutes({ "/syscollector/001/packages": page([{ name: "bash", version: "5", scan: { id: 0, time: "2026-10-01T00:00:00Z" } }]) });
   const srv = await startFixtureServer(routes);
   try {
     const adapter = createWazuh414({ http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "u", password: "p", certSha256: srv.certSha256 });
-    const out = await collectWazuh({ adapter, now: () => Date.parse("2026-11-12T12:00:00Z") });
-    const pk = out.evidence.find((e) => e.assetKey === "wazuh:agent:001" && e.kind === "wazuh.packages");
-    assert.equal(pk.collectedAt, Date.parse(old));
+    const now = Date.parse("2026-11-12T12:00:00Z");
+    const out = await collectWazuh({ adapter, now: () => now });
+    assert.equal(out.evidence.find((e) => e.assetKey === "wazuh:agent:001" && e.kind === "wazuh.packages").collectedAt, now);
   } finally { await srv.close(); }
 });
 
