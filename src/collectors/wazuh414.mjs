@@ -66,8 +66,20 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256 }) {
     }
   }
 
+  // os and hardware are single-item endpoints: Wazuh rejects limit/offset
+  // on them with HTTP 400. Every other syscollector table is a paged list.
+  const SINGLE = new Set(["os", "hardware"]);
+
+  async function one(path) {
+    const body = await get(path);
+    const page = body?.data?.affected_items;
+    if (!Array.isArray(page)) throw Object.assign(new Error(`unexpected response for ${path}`), { code: "parse" });
+    return page;
+  }
+
   async function sys(id, table) {
-    const items = await all(`/syscollector/${encodeURIComponent(id)}/${table}`);
+    const path = `/syscollector/${encodeURIComponent(id)}/${table}`;
+    const items = SINGLE.has(table) ? await one(path) : await all(path);
     const times = items.map((i) => parseScanTime(i?.scan?.time)).filter((t) => t != null);
     scans.set(`${id}/${table}`, times.length ? Math.max(...times) : null);
     return items;
