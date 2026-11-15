@@ -118,3 +118,20 @@ test("router from config appears as unknown with a no-collector reason", async (
   assert.equal(r.state, "unknown");
   assert.match(r.reason, /no collector for this device yet/u);
 });
+
+test("an agent's standalone asset is removed once the agent is linked to a Proxmox machine", async () => {
+  const db = openDb(":memory:");
+  const store = new EvidenceStore(db, "default");
+  const holds = new HoldStore(db, "default");
+  const ledger = new LedgerStore(db, "default");
+  const config = { thresholds: {}, assets: {}, network: [], docker: [] };
+  const agents = [{ id: "001", name: "norco", ip: "192.168.0.10", macs: [], status: "active" }];
+  const wazuh = async () => ({ evidence: [{ assetKey: "wazuh:agent:001", kind: "wazuh.agent", value: { ...agents[0], lastKeepAlive: 1 } }], inventory: { agents } });
+  await collectionCycle({ db, tenantId: "default", store, holds, ledger, config, sources: { proxmox: async () => { throw new Error("403"); }, wazuh }, now: () => 1_000_000 });
+  assert.ok(db.prepare("SELECT 1 FROM assets WHERE asset_key = 'wazuh:agent:001'").get(), "standalone while Proxmox is failing");
+  const proxmox = async () => ({ evidence: [], inventory: { nodes: [{ name: "norco", ip: "192.168.0.10" }], guests: [] } });
+  await collectionCycle({ db, tenantId: "default", store, holds, ledger, config, sources: { proxmox, wazuh }, now: () => 2_000_000 });
+  assert.equal(db.prepare("SELECT 1 FROM assets WHERE asset_key = 'wazuh:agent:001'").get(), undefined);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger WHERE asset_key = 'wazuh:agent:001'").get().n, 0);
+  assert.ok(db.prepare("SELECT 1 FROM assets WHERE asset_key = 'pve:node:norco'").get());
+});

@@ -24,13 +24,10 @@ export async function collectWazuh({ adapter, now = Date.now }) {
       // Active agent: as fresh as now. Otherwise: its last check-in, unless
       // that is in the future (clock trouble), which counts as unknown age.
       const keepAlive = agent.lastKeepAlive != null && agent.lastKeepAlive <= t ? agent.lastKeepAlive : 0;
+      // Not the syscollector scan time: Wazuh only rewrites it when an item
+      // changes, so an unchanged package list would look stale forever.
       const baseAt = agent.status === "active" ? t : keepAlive;
-      // ...and never newer than the last syscollector scan, if Wazuh says.
-      const datedAt = (method) => {
-        const scan = adapter.scanTime?.(agent.id, method);
-        if (scan == null) return baseAt;
-        return scan > t ? 0 : Math.min(baseAt, scan);
-      };
+      const datedAt = () => baseAt;
       try {
         const got = {};
         for (const [method] of KINDS) got[method] = await adapter[method](agent.id);

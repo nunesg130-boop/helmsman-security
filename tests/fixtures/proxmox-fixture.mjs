@@ -1,5 +1,6 @@
 // Proxmox API fixture routes (shapes per the PVE API: every body is {data}).
 export const T = 1_800_000_000; // node clock, seconds
+const log = (lines) => lines.map((t, i) => ({ n: i + 1, t }));
 export function proxmoxRoutes(over = {}) {
   const d = (data) => ({ data });
   return {
@@ -19,17 +20,29 @@ export function proxmoxRoutes(over = {}) {
     "/api2/json/nodes/norco/storage": d([{ storage: "backups", active: 1, enabled: 1, used: 100, total: 1000, shared: 1 }]),
     "/api2/json/nodes/main/storage": d([{ storage: "backups", active: 1, enabled: 1, used: 100, total: 1000, shared: 1 }]),
     "/api2/json/cluster/backup": d([{ id: "daily", enabled: 1, all: 1, exclude: "114", storage: "backups" }]),
-    "/api2/json/nodes/norco/storage/backups/content": d([
-      { volid: "backups:backup/vzdump-qemu-109-a.vma.zst", vmid: 109, ctime: T - 86400 },
-      { volid: "backups:backup/vzdump-qemu-109-b.vma.zst", vmid: 109, ctime: T - 3600 },
-      { volid: "backups:backup/vzdump-qemu-100-a.vma.zst", vmid: 100, ctime: T - 7200 }
-    ]),
-    "/api2/json/nodes/main/storage/backups/content": d([{ volid: "backups:backup/vzdump-qemu-100-a.vma.zst", vmid: 100, ctime: T - 7200 }]),
+    // A PVEAuditor token sees an empty backup listing (Proxmox hides backup
+    // volumes without Datastore.AllocateSpace + VM.Backup).
+    "/api2/json/nodes/norco/storage/backups/content": d([]),
+    "/api2/json/nodes/main/storage/backups/content": d([]),
     "/api2/json/nodes/norco/tasks": d([
-      { type: "vzdump", id: "109", status: "OK", endtime: T - 3600 },
-      { type: "vzdump", id: "109", status: "ERROR: timeout", endtime: T - 90000 }
+      { upid: "UPID:norco:0001:vzdump::root@pam:", type: "vzdump", id: "", status: "OK", endtime: T - 3600 },
+      { upid: "UPID:norco:0002:vzdump::root@pam:", type: "vzdump", id: "", status: "job errors", endtime: T - 90000 }
     ]),
-    "/api2/json/nodes/main/tasks": d([{ type: "vzdump", id: "", status: "job errors", endtime: T - 7000 }]),
+    [`/api2/json/nodes/norco/tasks/${encodeURIComponent("UPID:norco:0001:vzdump::root@pam:")}/log`]: d(log([
+      "INFO: starting new backup job: vzdump --all 1 --exclude 114 --storage backups",
+      "INFO: Starting Backup of VM 109 (qemu)",
+      "INFO: Finished Backup of VM 109 (00:01:02)",
+      "INFO: Backup job finished successfully"
+    ])),
+    [`/api2/json/nodes/norco/tasks/${encodeURIComponent("UPID:norco:0002:vzdump::root@pam:")}/log`]: d(log([
+      "INFO: Starting Backup of VM 109 (qemu)",
+      "ERROR: Backup of VM 109 failed - timeout"
+    ])),
+    "/api2/json/nodes/main/tasks": d([{ upid: "UPID:main:0003:vzdump::root@pam:", type: "vzdump", id: "", status: "job errors", endtime: T - 7000 }]),
+    [`/api2/json/nodes/main/tasks/${encodeURIComponent("UPID:main:0003:vzdump::root@pam:")}/log`]: d(log([
+      "INFO: Starting Backup of VM 100 (qemu)",
+      "ERROR: Backup of VM 100 failed - no space left on device"
+    ])),
     ...over
   };
 }

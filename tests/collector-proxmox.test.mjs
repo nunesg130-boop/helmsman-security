@@ -39,13 +39,23 @@ test("backup coverage honours exclude", async () => {
   assert.equal(ev(out, "pve:guest:109", "pve.backups").coveredByJob, true);
 });
 
-test("newest backup per vmid across nodes, and last task by vmid", async () => {
+test("backups come from vzdump job logs, per guest, even when the storage listing is empty", async () => {
   const { out } = await collect(proxmoxRoutes());
-  const b = ev(out, "pve:guest:109", "pve.backups");
-  assert.equal(b.newestBackupAt, (T - 3600) * 1000);
-  assert.deepEqual(b.lastTask, { status: "OK", endtime: (T - 3600) * 1000 });
-  assert.equal(ev(out, "pve:guest:100", "pve.backups").lastTask.status, "job errors");
+  const b109 = ev(out, "pve:guest:109", "pve.backups");
+  assert.equal(b109.newestBackupAt, (T - 3600) * 1000);
+  assert.deepEqual(b109.lastTask, { status: "OK", endtime: (T - 3600) * 1000 });
+  const b100 = ev(out, "pve:guest:100", "pve.backups");
+  assert.equal(b100.newestBackupAt, null);
+  assert.deepEqual(b100.lastTask, { status: "failed: no space left on device", endtime: (T - 7000) * 1000 });
   assert.equal(ev(out, "pve:guest:114", "pve.backups").newestBackupAt, null);
+});
+
+test("a task log that can't be read leaves that node's guests without backup evidence", async () => {
+  const routes = proxmoxRoutes();
+  routes[`/api2/json/nodes/norco/tasks/${encodeURIComponent("UPID:norco:0001:vzdump::root@pam:")}/log`] = () => [500, {}];
+  const { out } = await collect(routes);
+  assert.equal(ev(out, "pve:guest:109", "pve.backups"), undefined);
+  assert.ok(ev(out, "pve:guest:100", "pve.backups"));
 });
 
 test("offsetSeconds uses the request midpoint", async () => {

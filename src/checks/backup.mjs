@@ -11,7 +11,7 @@ export const backupJobs = {
     const b = ev.value;
     const problems = [];
     if (b.coveredByJob === false) problems.push("not in any enabled backup job");
-    if (b.newestBackupAt == null) problems.push("no backup found on backup storage");
+    if (b.newestBackupAt == null) problems.push("no successful backup in recent backup job logs");
     else if (now - b.newestBackupAt > threshold(config, "backupMaxAgeDays") * 86400_000) problems.push(`last backup ${formatAge(now - b.newestBackupAt)} ago`);
     if (b.lastTask && String(b.lastTask.status).toUpperCase() !== "OK") problems.push(`last backup task: ${b.lastTask.status}`);
     if (problems.length) return result("issue", problems.join("; "));

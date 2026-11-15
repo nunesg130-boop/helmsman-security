@@ -41,7 +41,7 @@ test("no disks reported is unknown", () => assert.equal(run(diskHealth, node, "p
 const bk = (over) => ({ coveredByJob: true, jobIds: ["daily"], newestBackupAt: NOW - DAY, lastTask: { status: "OK", endtime: NOW - DAY }, ...over });
 test("recent backup is ok", () => assert.equal(run(backupJobs, guest, "pve.backups", bk({})).state, "ok"));
 test("guest in no job is an issue", () => assert.match(run(backupJobs, guest, "pve.backups", bk({ coveredByJob: false })).reason, /not in any enabled backup job/u));
-test("no backup file is an issue", () => assert.match(run(backupJobs, guest, "pve.backups", bk({ newestBackupAt: null })).reason, /no backup found/u));
+test("no successful backup is an issue", () => assert.match(run(backupJobs, guest, "pve.backups", bk({ newestBackupAt: null })).reason, /no successful backup in recent backup job logs/u));
 test("old backup is an issue", () => assert.match(run(backupJobs, guest, "pve.backups", bk({ newestBackupAt: NOW - 3 * DAY })).reason, /last backup 3 d ago/u));
 test("failed last task is an issue", () => assert.match(run(backupJobs, guest, "pve.backups", bk({ lastTask: { status: "job errors", endtime: NOW } })).reason, /last backup task: job errors/u));
 test("backup_jobs does not apply to nodes", () => assert.equal(run(backupJobs, node, "pve.backups", bk({})).state, "not_applicable"));
