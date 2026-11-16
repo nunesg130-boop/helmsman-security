@@ -20,7 +20,7 @@ function setup() {
   const findings = new FindingStore(db, "t");
   db.prepare("INSERT INTO assets (tenant_id, asset_key, class, name, sources_json, last_seen_at) VALUES ('t', 'pve:guest:100', 'guest', 'Jelly-Arr', ?, ?)").run(JSON.stringify({ pve: { vmid: 100 }, wazuh: { id: "010" } }), NOW);
   putOk(store, "wazuh", [{ assetKey: "_inventory", kind: "inventory.wazuh", value: { agents: [{ id: "010", name: "Jellyfin" }, { id: "000", name: "wazuh" }, { id: "022", name: "Management-VM" }] } }], NOW);
-  const cycle = (indexer) => vulnCycle({ db, tenantId: "t", store, findings, indexer, config: {}, now: () => NOW });
+  const cycle = (indexer, extra = {}) => vulnCycle({ db, tenantId: "t", store, findings, indexer, config: {}, now: () => NOW, ...extra });
   return { db, store, findings, cycle };
 }
 const indexerOf = (records) => ({ vulnerabilities: async () => result(records) });
@@ -64,4 +64,30 @@ test("the password never reaches the stored error", async () => {
   await vulnCycle({ db, tenantId: "t", store, findings: new FindingStore(db, "t"), config: {}, now: () => NOW, secrets: ["ix-secret"],
     indexer: { vulnerabilities: async () => { throw new Error("bad login ix-secret"); } } });
   assert.ok(!store.lastRun("wazuh-vulns").error.includes("ix-secret"));
+});
+
+test("a read that finishes after the deadline writes nothing, even later", async () => {
+  const { store, findings, cycle } = setup();
+  const slow = { vulnerabilities: () => new Promise((resolve) => setTimeout(() => resolve(result([rec("010", "CVE-LATE")])), 60)) };
+  assert.equal((await cycle(slow, { deadlineMs: 10 })).status, "failed");
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(findings.list({}, AGE).total, 0);
+  assert.equal(store.get("wazuh:agent:010", "wazuh.vulnscan"), null);
+});
+
+test("findings and their evidence are stored together or not at all", async () => {
+  const { db, store, findings, cycle } = setup();
+  await cycle(indexerOf([rec("010", "CVE-1")]));
+  db.exec("CREATE TRIGGER block_evidence BEFORE INSERT ON evidence WHEN NEW.kind = 'wazuh.vulnscan' BEGIN SELECT RAISE(ABORT, 'disk full'); END;");
+  db.exec("CREATE TRIGGER block_evidence_u BEFORE UPDATE ON evidence WHEN NEW.kind = 'wazuh.vulnscan' BEGIN SELECT RAISE(ABORT, 'disk full'); END;");
+  assert.equal((await cycle(indexerOf([rec("010", "CVE-2")]))).status, "failed");
+  assert.deepEqual(findings.list({}, AGE).items.map((i) => i.cve), ["CVE-1"]);
+  assert.match(store.lastRun("wazuh-vulns").error, /could not store/u);
+});
+
+test("when two asset rows claim an agent, the machine seen most recently wins over a stale one", async () => {
+  const { db, findings, cycle } = setup();
+  db.prepare("INSERT INTO assets (tenant_id, asset_key, class, name, sources_json, last_seen_at) VALUES ('t', 'pve:guest:999', 'guest', 'old', ?, ?)").run(JSON.stringify({ wazuh: { id: "010" } }), NOW - 86400_000);
+  await cycle(indexerOf([rec("010", "CVE-1")]));
+  assert.equal(findings.list({}, AGE).items[0].assetKey, "pve:guest:100");
 });

@@ -24,7 +24,7 @@ test("the check is registered", () => assert.ok(CHECKS.includes(vulnCoverageHost
 test("an agent with records gets ok with its count", () => {
   const r = run(store());
   assert.equal(r.state, "ok");
-  assert.match(r.reason, /9256 known vulnerabilities/u);
+  assert.match(r.reason, /9256 known vulnerabilities on record/u);
 });
 test("an agent with no records is unknown, never ok", () => {
   const r = run(store({ scan: { count: 0, newestDetectedAt: null } }));

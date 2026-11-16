@@ -96,7 +96,7 @@ test("public API behaviour", async (t) => {
 });
 
 // --- vulnerabilities ---
-async function vulnSetup({ feedsAt = Date.now(), runAt = Date.now(), failLast = false } = {}) {
+async function vulnSetup({ feedsAt = Date.now(), runAt = Date.now(), failLast = false, epss = true, neverRun = false } = {}) {
   const { FindingStore } = await import("../src/vuln/findings.mjs");
   const db = openDb(":memory:");
   const store = new EvidenceStore(db, "default");
@@ -108,9 +108,15 @@ async function vulnSetup({ feedsAt = Date.now(), runAt = Date.now(), failLast = 
   const mk = (cve, over = {}) => ({ assetKey: "pve:guest:100", cve, pkg: { name: "openssl", version: "3.0-1", arch: "amd64", type: "deb" }, severity: "high", cvss: 7.5, fixState: "fix-available-not-applied", fixedVersion: "3.0-2", lowConfidence: false, condition: "Package less than 3.0-2", recognisedCondition: true, detectedAt: 1, ...over });
   f.replaceSource("wazuh", [mk("CVE-1", { severity: "critical", cvss: 9.8 }), mk("CVE-2"), mk("CVE-3", { assetKey: "wazuh:agent:099", fixState: "no-fix-exists", fixedVersion: null })], runAt);
   f.replaceKev([{ cve: "CVE-2", dateAdded: "2026-01-01", ransomware: false }], feedsAt);
-  f.replaceEpss([{ cve: "CVE-1", score: 0.9, percentile: 0.99 }], feedsAt);
-  const r = store.beginRun("wazuh-vulns", runAt);
-  store.finishRun(r, "ok", {}, runAt);
+  if (epss) f.replaceEpss([{ cve: "CVE-1", score: 0.9, percentile: 0.99 }], feedsAt);
+  if (neverRun) {
+    f.replaceSource("wazuh", [], runAt);
+    const r0 = store.beginRun("wazuh-vulns", runAt);
+    store.finishRun(r0, "failed", { error: "auth: HTTP 401" }, runAt);
+  } else {
+    const r = store.beginRun("wazuh-vulns", runAt);
+    store.finishRun(r, "ok", {}, runAt);
+  }
   if (failLast) { const r2 = store.beginRun("wazuh-vulns", Date.now()); store.finishRun(r2, "failed", { error: "auth: HTTP 401" }, Date.now()); }
   return createPublicServer({ db, tenantId: "default", store, credentials, tls, host: "127.0.0.1", port: 0, version: "0.1.0" });
 }
@@ -184,5 +190,42 @@ test("the indexer password never appears in a vulnerability response", async () 
     for (const path of ["/api/v1/vulnerabilities", "/api/v1/vulnerabilities/summary", "/api/v1/summary"]) {
       assert.ok(!JSON.stringify((await req(srv.port, path)).body).includes("ix-secret-value"), path);
     }
+  } finally { await srv.close(); }
+});
+
+test("a fresh KEV list is still usable when EPSS is missing", async () => {
+  const srv = await vulnSetup({ epss: false });
+  try {
+    const { body } = await req(srv.port, "/api/v1/vulnerabilities");
+    assert.deepEqual([body.kevStale, body.epssStale, body.threatDataStale, body.items[0].kev, body.items[0].epss], [false, true, true, true, null]);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities?kev=true")).body.total, 1);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities/summary")).body.totals.kev, 1);
+  } finally { await srv.close(); }
+});
+
+test("filtering by KEV without a current KEV list is refused, not answered with nothing", async () => {
+  const srv = await vulnSetup({ feedsAt: Date.now() - 30 * 86400_000 });
+  try {
+    const r = await req(srv.port, "/api/v1/vulnerabilities?kev=true");
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /KEV/u);
+  } finally { await srv.close(); }
+});
+
+test("feeds or runs dated in the future (clock moved back) are stale everywhere", async () => {
+  const future = Date.now() + 86400_000;
+  const srv = await vulnSetup({ feedsAt: future, runAt: future });
+  try {
+    const { body } = await req(srv.port, "/api/v1/vulnerabilities");
+    assert.deepEqual([body.kevStale, body.threatDataStale, body.findingsStale, body.items[0].kev], [true, true, true, null]);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities/summary")).body.totals.kev, null);
+  } finally { await srv.close(); }
+});
+
+test("when vulnerabilities were never read successfully, totals are null rather than zero", async () => {
+  const srv = await vulnSetup({ neverRun: true });
+  try {
+    const { body } = await req(srv.port, "/api/v1/vulnerabilities/summary");
+    assert.deepEqual([body.totals, body.findingsStale, body.collection.lastSuccessAt], [null, true, null]);
   } finally { await srv.close(); }
 });

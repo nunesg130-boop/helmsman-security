@@ -38,12 +38,19 @@ The database upgrades itself on start (schema version 2). The engine needs outbo
 ## 5. Enter the password
 On https://security.jellofin.com → **Credentials** → choose `wazuh.indexerPassword` → paste the password from step 2 → Save.
 
-## 6. Check
-The first vulnerability read starts after the next collection and takes a minute or two. Then:
+## 6. Restart once more, then check
+The engine tried to read vulnerabilities at the restart in step 4, before it had the password, and won't retry for an hour. Restart it so it reads now:
+```
+systemctl restart helmsman-security
+```
+Wait about three minutes (the first read follows the normal collection), then:
 ```
 hs-report
 ```
 Expected: collectors `threat-feeds` and `wazuh-vulns` are `ok`; a `=== VULNERABILITIES ===` section lists every machine; the Wazuh server itself appears under UNKNOWNS for `vuln_coverage_host`.
+
+## Known limit
+The engine confirms that Wazuh holds vulnerability records for each machine and that it read all of them recently. It cannot yet confirm that Wazuh's own vulnerability database is up to date; that depends on the Wazuh server reaching its update service.
 
 ## What the columns mean
 - **fixable by update**: a newer package version that fixes the flaw exists and isn't installed. Updating the machine clears these.

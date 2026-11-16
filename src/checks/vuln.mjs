@@ -13,6 +13,6 @@ export const vulnCoverageHost = {
     if (agent.value.status !== "active") return result("unknown", `agent is ${agent.value.status}; vulnerability data may be out of date`);
     const count = Number(scan.value?.count);
     if (!(count > 0)) return result("unknown", "Wazuh has no vulnerability records for this machine; can't tell 'clean' from 'not scanned'");
-    return result("ok", `${count} known vulnerabilities, scan data current`);
+    return result("ok", `${count} known vulnerabilities on record`);
   }
 };

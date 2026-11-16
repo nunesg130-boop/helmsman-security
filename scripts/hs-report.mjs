@@ -51,23 +51,30 @@ try {
   const v = await get("/api/v1/vulnerabilities/summary");
   if (v.collection.status !== "never_run") {
     console.log("=== VULNERABILITIES ===");
-    console.log(`last read: ${ago(v.collection.lastSuccessAt)}${v.findingsStale ? "  ** OUT OF DATE **" : ""}${v.collection.lastError ? `  last error: ${v.collection.lastError}` : ""}`);
-    console.log(`threat lists: KEV ${ago(v.feeds.kev?.fetchedAt)}, EPSS ${ago(v.feeds.epss?.fetchedAt)}${v.threatDataStale ? "  ** OUT OF DATE: 'actively exploited' is unknown **" : ""}`);
-    console.log("machine | total | critical/high | fixable by update | actively exploited (KEV) | unrecognised");
-    const rows = [...v.assets].sort((a, b) => (b.kev ?? 0) - (a.kev ?? 0) || b.total - a.total);
-    for (const a of rows) console.log(`${a.assetName} | ${a.total} | ${a.critical}/${a.high} | ${a.fixAvailable} | ${a.kev ?? "unknown"} | ${a.unrecognisedCondition}`);
-    const t = v.totals;
-    console.log(`TOTAL | ${t.total} | ${t.critical}/${t.high} | ${t.fixAvailable} | ${t.kev ?? "unknown"} | ${t.unrecognisedCondition}`);
-    if (!v.threatDataStale) {
+    if (v.collection.lastError) console.log(`last error: ${v.collection.lastError}`);
+    if (v.totals == null) {
+      console.log("UNKNOWN: vulnerabilities have never been read successfully. This is not 'none found'.");
+    } else {
+      if (v.findingsStale) console.log(`** OUT OF DATE: last successful read ${ago(v.collection.lastSuccessAt)}. The figures below are the last known, not current. **`);
+      else console.log(`last read: ${ago(v.collection.lastSuccessAt)}`);
+      console.log(`threat lists: KEV ${v.kevStale ? "MISSING OR OUT OF DATE" : ago(v.feeds.kev?.fetchedAt)}, EPSS ${v.epssStale ? "MISSING OR OUT OF DATE" : ago(v.feeds.epss?.fetchedAt)}`);
+      console.log("machine | total | critical/high | fixable by update | actively exploited (KEV) | unrecognised");
+      const rows = [...v.assets].sort((a, b) => (b.kev ?? 0) - (a.kev ?? 0) || b.total - a.total);
+      for (const a of rows) console.log(`${a.assetName} | ${a.total} | ${a.critical}/${a.high} | ${a.fixAvailable} | ${a.kev ?? "unknown"} | ${a.unrecognisedCondition}`);
+      const t = v.totals;
+      console.log(`TOTAL | ${t.total} | ${t.critical}/${t.high} | ${t.fixAvailable} | ${t.kev ?? "unknown"} | ${t.unrecognisedCondition}`);
       console.log("=== ACTIVELY EXPLOITED (KEV) ===");
-      const kev = [];
-      for (let offset = 0; ; offset += 200) {
-        const r = await get(`/api/v1/vulnerabilities?kev=true&limit=200&offset=${offset}`);
-        kev.push(...r.items);
-        if (kev.length >= r.total || r.items.length === 0) break;
+      if (v.kevStale) console.log("UNKNOWN: the KEV list is missing or out of date.");
+      else {
+        const kev = [];
+        for (let offset = 0; ; offset += 200) {
+          const r = await get(`/api/v1/vulnerabilities?kev=true&limit=200&offset=${offset}`);
+          kev.push(...r.items);
+          if (kev.length >= r.total || r.items.length === 0) break;
+        }
+        for (const k of kev) console.log(`${k.assetName} | ${k.cve} | ${k.pkg.name} ${k.pkg.version} | ${k.fixedVersion ? `fixed in ${k.fixedVersion}` : k.fixState}${k.lowConfidence ? " | low confidence" : ""}`);
+        if (!kev.length) console.log(v.findingsStale ? "(none in the last known data)" : "(none)");
       }
-      for (const k of kev) console.log(`${k.assetName} | ${k.cve} | ${k.pkg.name} ${k.pkg.version} | ${k.fixedVersion ? `fixed in ${k.fixedVersion}` : k.fixState}${k.lowConfidence ? " | low confidence" : ""}`);
-      if (!kev.length) console.log("(none)");
     }
   }
 } catch (error) {

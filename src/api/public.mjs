@@ -36,14 +36,14 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
     const run = store.lastRun(VULN_COLLECTOR);
     const last = run?.lastSuccessAt ?? null;
     const t = now();
-    const kev = findings.feed("kev");
-    const epss = findings.feed("epss");
-    const freshFeed = (f) => Boolean(f) && t - f.fetchedAt <= maxFeedAgeMs;
+    const fresh = findings.freshness({ now: t, maxFeedAgeMs });
     return {
       collection: { status: run?.status ?? "never_run", lastSuccessAt: last, lastError: run?.status === "failed" ? run.error : null },
-      findingsStale: last == null || t - last > vulnStaleAfterMs || run.status === "failed",
-      feeds: { kev, epss },
-      threatDataStale: !(freshFeed(kev) && freshFeed(epss))
+      findingsStale: last == null || t - last > vulnStaleAfterMs || last > t + 60_000 || run.status === "failed",
+      feeds: { kev: findings.feed("kev"), epss: findings.feed("epss") },
+      kevStale: !fresh.kev,
+      epssStale: !fresh.epss,
+      threatDataStale: !(fresh.kev && fresh.epss)
     };
   }
   const assetNames = () => new Map(db.prepare("SELECT asset_key, name FROM assets WHERE tenant_id = ?").all(tenantId).map((a) => [a.asset_key, a.name]));
@@ -116,19 +116,23 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       if (fix && !FIX_STATES.has(fix)) return [400, { error: "fix must be fix-available-not-applied, no-fix-exists or unknown" }];
       if (severity && !SEVERITIES.has(severity)) return [400, { error: "severity must be critical, high, medium, low or unknown" }];
       if (kev && kev !== "true" && kev !== "false") return [400, { error: "kev must be true or false" }];
+      const meta = vulnMeta();
+      if (kev && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so findings can't be filtered by it", ...meta }];
       const limit = Math.max(1, intParam(url, "limit", 50, 200));
       const offset = intParam(url, "offset", 0, Number.MAX_SAFE_INTEGER);
       const { items, total } = findings.list({ assetKey: q.get("asset") || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined, limit, offset }, { now: now(), maxFeedAgeMs });
       const names = assetNames();
-      return [200, { items: items.map((i) => ({ ...i, assetName: names.get(i.assetKey) ?? i.assetKey })), total, limit, offset, ...vulnMeta() }];
+      return [200, { items: items.map((i) => ({ ...i, assetName: names.get(i.assetKey) ?? i.assetKey })), total, limit, offset, ...meta }];
     },
     "/api/v1/vulnerabilities/summary": () => {
       const names = assetNames();
       const assets = findings.summaryByAsset({ now: now(), maxFeedAgeMs }).map((a) => ({ ...a, assetName: names.get(a.assetKey) ?? a.assetKey }));
       const totals = { total: 0, critical: 0, high: 0, medium: 0, low: 0, unknownSeverity: 0, fixAvailable: 0, noFix: 0, fixUnknown: 0, lowConfidence: 0, unrecognisedCondition: 0 };
       for (const a of assets) for (const k of Object.keys(totals)) totals[k] += a[k];
-      totals.kev = assets.some((a) => a.kev == null) ? null : assets.reduce((n, a) => n + a.kev, 0);
-      return [200, { assets, totals, ...vulnMeta() }];
+      const meta = vulnMeta();
+      totals.kev = meta.kevStale ? null : assets.reduce((n, a) => n + (a.kev ?? 0), 0);
+      // Never read successfully: there are no figures to give, not zeros.
+      return [200, { assets, totals: meta.collection.lastSuccessAt == null ? null : totals, ...meta }];
     },
     "/api/v1/assets": (url) => {
       const counts = new Map();

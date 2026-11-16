@@ -18,7 +18,8 @@ export class FindingStore {
 
   // Replace everything one source reported. A finding that persists keeps
   // its first_seen_at; one the source no longer reports is removed.
-  replaceSource(source, findings, now) {
+  // Pass { transaction: false } when the caller already holds a transaction.
+  replaceSource(source, findings, now, { transaction = true } = {}) {
     const upsert = this.db.prepare(
       `INSERT INTO findings (tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch, pkg_type, severity, cvss, fix_state, fixed_version,
          low_confidence, condition, recognised_condition, detected_at, first_seen_at, last_confirmed_at)
@@ -28,7 +29,8 @@ export class FindingStore {
          fixed_version = excluded.fixed_version, low_confidence = excluded.low_confidence, condition = excluded.condition,
          recognised_condition = excluded.recognised_condition, detected_at = excluded.detected_at, last_confirmed_at = excluded.last_confirmed_at`
     );
-    return this.#tx(() => {
+    const run = transaction ? (fn) => this.#tx(fn) : (fn) => fn();
+    return run(() => {
       // Mark, re-confirm, sweep: whatever isn't re-confirmed is gone.
       this.db.prepare("UPDATE findings SET last_confirmed_at = -1 WHERE tenant_id = ? AND source = ?").run(this.tenantId, source);
       for (const f of findings) {
@@ -76,6 +78,11 @@ export class FindingStore {
   #fresh(name, now, maxFeedAgeMs) {
     const f = this.feed(name);
     return Boolean(f) && now - f.fetchedAt <= maxFeedAgeMs && f.fetchedAt <= now + 60_000;
+  }
+
+  // The one place that decides whether a threat feed can be relied on.
+  freshness({ now, maxFeedAgeMs }) {
+    return { kev: this.#fresh("kev", now, maxFeedAgeMs), epss: this.#fresh("epss", now, maxFeedAgeMs) };
   }
 
   list({ assetKey, kev, fixState, severity, limit = 100, offset = 0 } = {}, { now, maxFeedAgeMs }) {
