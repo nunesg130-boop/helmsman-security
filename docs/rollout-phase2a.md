@@ -9,7 +9,38 @@ curl -sk -o /dev/null -w "%{http_code}\n" https://192.168.0.115:9200
 curl -sI https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json | head -1
 curl -sI https://epss.empiricalsecurity.com/epss_scores-current.csv.gz | head -1
 ```
-Expected: `401` (reachable, login required), then two `200` lines. If the first prints `000`, the indexer only listens on the Wazuh VM itself; stop and report it. If the EPSS line is a redirect (`301`/`302`), report the `location:` it shows.
+Expected: `401` (reachable, login required), `200`, then `302` for EPSS (a redirect to the dated file, which the engine follows).
+
+If the first prints `000`, the indexer only listens on the Wazuh VM itself (`network.host: "127.0.0.1"`, the all-in-one default). Don't open it to the LAN. Add a doorway on the Wazuh VM that only accepts helmsec, leaving Wazuh's own settings untouched (from the Proxmox node's shell, VM 116):
+```
+cat > /root/wazuh-indexer-gate.sh <<'GATE'
+set -e
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -y -qq socat
+cat > /etc/systemd/system/hs-indexer-gate.service <<'UNIT'
+[Unit]
+Description=Doorway to the Wazuh indexer for helmsman-security (only from 192.168.0.116)
+After=network-online.target wazuh-indexer.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP4-LISTEN:9201,bind=192.168.0.115,fork,reuseaddr,range=192.168.0.116/32 TCP:127.0.0.1:9200
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload && systemctl enable --now hs-indexer-gate
+GATE
+qm guest exec 116 --timeout 300 --pass-stdin 1 -- bash < /root/wazuh-indexer-gate.sh
+```
+It passes the TLS connection through untouched, so the certificate pin still works; the read-only part comes from the indexer login in step 2. Socat 1.8 needs `TCP4-LISTEN` for the `range=` rule. Use port **9201** in place of 9200 in steps 3 and 4. Test: from helmsec `curl -sk -o /dev/null -w "%{http_code}\n" https://192.168.0.115:9201` prints `401`; from any other machine it prints `000`.
 
 ## 2. Create the read-only indexer login (Wazuh dashboard)
 1. **☰ → Indexer management → Security → Roles → Create role.** Name `helmsec_vuln_read`. Under **Index permissions**: index `wazuh-states-vulnerabilities-*`, permission `read`. No cluster or tenant permissions. Create.
@@ -21,7 +52,7 @@ This login can only read vulnerability records. It cannot read alerts, change se
 ## 3. Read the indexer's certificate fingerprint
 On the Wazuh VM:
 ```
-openssl s_client -connect 127.0.0.1:9200 </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
+openssl s_client -connect 127.0.0.1:9200 </dev/null   # or, from helmsec, 192.168.0.115:9201 2>/dev/null | openssl x509 -noout -fingerprint -sha256
 ```
 Fingerprints are public; it is safe to share.
 
@@ -36,7 +67,7 @@ systemctl restart helmsman-security
 The database upgrades itself on start (schema version 2). The engine needs outbound HTTPS to `www.cisa.gov` and `epss.empiricalsecurity.com` in addition to `endoflife.date`.
 
 ## 5. Enter the password
-On https://security.jellofin.com → **Credentials** → choose `wazuh.indexerPassword` → paste the password from step 2 → Save.
+On https://security.jellofin.com → **Credentials** → choose `wazuh.indexerPassword` → paste the password from step 2 → Save. Copy and paste it from the password manager; don't use the browser's autofill on that field, which may fill the site's own login instead. To confirm the password itself is right: `curl -sk -u helmsec-vuln-ro https://192.168.0.115:9201/_plugins/_security/authinfo` should list `helmsec_vuln_read` under roles.
 
 ## 6. Restart once more, then check
 The engine tried to read vulnerabilities at the restart in step 4, before it had the password, and won't retry for an hour. Restart it so it reads now:
