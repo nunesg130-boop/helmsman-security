@@ -121,7 +121,7 @@ export async function start({
   const feedMaxAgeMs = threshold(config, "threatFeedMaxAgeDays") * 86400_000;
   const refreshFeeds = async () => {
     if (!indexerCfg) return { status: "not_configured" };
-    return runCollector(store, "threat-feeds", () => refreshThreatFeeds({ http, findings, now, kevUrl, epssUrl, ...(feedCertSha256 ? { certSha256: feedCertSha256 } : {}), ...feedMinimums }),
+    return runCollector(store, "threat-feeds", () => refreshThreatFeeds({ http, findings, now, kevUrl, epssUrl, ...(feedCertSha256 ? { certSha256: feedCertSha256 } : {}), maxContentAgeMs: feedMaxAgeMs, secrets: secretValues(), ...feedMinimums }),
       { now, staleAfterMs: feedMaxAgeMs, secrets: secretValues(), deadlineMs: 5 * 60_000 });
   };
   const refreshEol = () => eolCycle({
@@ -140,8 +140,10 @@ export async function start({
       { name: "eol", everyMs: threshold(config, "eolRefreshHours") * 3600_000, run: refreshEol },
       { name: "collect", everyMs: threshold(config, "collectMinutes") * 60_000, run: collect },
       ...(indexerCfg ? [
-        { name: "threat-feeds", everyMs: threshold(config, "threatFeedRefreshHours") * 3600_000, run: refreshFeeds },
-        { name: "vulns", everyMs: threshold(config, "vulnsRefreshMinutes") * 60_000, run: async () => { await firstCollect; return collectVulns(); } }
+        // A failed feed or vulnerability read is retried after 10 minutes
+        // (e.g. the internet wasn't up yet after a power cut).
+        { name: "threat-feeds", everyMs: threshold(config, "threatFeedRefreshHours") * 3600_000, retryMs: 10 * 60_000, run: refreshFeeds },
+        { name: "vulns", everyMs: threshold(config, "vulnsRefreshMinutes") * 60_000, retryMs: 10 * 60_000, run: async () => { await firstCollect; return collectVulns(); } }
       ] : [])
     ],
     onError: (name, e) => log(`${name} cycle error: ${e.message}`)

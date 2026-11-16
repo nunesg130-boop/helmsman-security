@@ -32,3 +32,29 @@ test("stop waits for the in-flight run", async () => {
   await sched.stop();
   assert.equal(finished, true);
 });
+
+test("a run that reports failure is retried after retryMs, not a full interval", async () => {
+  const delays = [];
+  let runs = 0;
+  const sched = startScheduler({
+    tasks: [{ name: "vulns", everyMs: 3600_000, retryMs: 300_000, run: async () => { runs += 1; return { status: runs === 1 ? "failed" : "ok" }; } }],
+    setTimer: (fn, ms) => { delays.push(ms); return 0; }, clearTimer: () => {}
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  await sched.stop();
+  assert.deepEqual(delays, [300_000]);
+});
+
+test("a throwing run also uses retryMs; a task without retryMs keeps its interval", async () => {
+  const delays = [];
+  const sched = startScheduler({
+    tasks: [
+      { name: "a", everyMs: 1000, retryMs: 50, run: async () => { throw new Error("x"); } },
+      { name: "b", everyMs: 1000, run: async () => ({ status: "failed" }) }
+    ],
+    onError: () => {}, setTimer: (fn, ms) => { delays.push(ms); return 0; }, clearTimer: () => {}
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  await sched.stop();
+  assert.deepEqual(delays.sort((x, y) => x - y), [50, 1000]);
+});
