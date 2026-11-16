@@ -28,17 +28,41 @@ export function parseScanTime(v) {
   return Number.isFinite(t) ? t : null;
 }
 
-export function createWazuh414({ http, baseUrl, user, password, certSha256 }) {
+// The Wazuh API allows a fixed number of requests per minute (300 by default,
+// shared with the dashboard). Requests are paced under that budget, and an
+// HTTP 429 waits and retries a bounded number of times.
+const RETRY_429_MS = [15_000, 30_000, 45_000];
+const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function createWazuh414({ http, baseUrl, user, password, certSha256, requestsPerMinute = 120, sleep = realSleep, now = Date.now }) {
   const base = baseUrl.replace(/\/+$/u, "");
   let token = null;
+  const gapMs = requestsPerMinute > 0 ? 60_000 / requestsPerMinute : 0;
+  let lastAt = -Infinity;
+
+  async function paced(fn) {
+    for (let attempt = 0; ; attempt++) {
+      if (gapMs) {
+        const wait = lastAt + gapMs - now();
+        if (wait > 0) await sleep(wait);
+        lastAt = now();
+      }
+      try {
+        return await fn();
+      } catch (error) {
+        if (error.status !== 429 || attempt >= RETRY_429_MS.length) throw error;
+        await sleep(RETRY_429_MS[attempt]);
+      }
+    }
+  }
   const scans = new Map(); // `${id}/${table}` -> newest scan time (ms)
 
   async function login() {
-    const body = await http.fetchJson(`${base}${LOGIN}`, {
+    const body = await paced(() => http.fetchJson(`${base}${LOGIN}`, {
       method: "POST",
       certSha256,
       headers: { authorization: `Basic ${Buffer.from(`${user}:${password}`).toString("base64")}` }
-    });
+    }));
     token = body?.data?.token;
     if (!token) throw Object.assign(new Error("Wazuh login returned no token"), { code: "auth" });
   }
@@ -46,11 +70,11 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256 }) {
   async function get(path) {
     if (!token) await login();
     try {
-      return await http.fetchJson(`${base}${path}`, { certSha256, headers: { authorization: `Bearer ${token}` } });
+      return await paced(() => http.fetchJson(`${base}${path}`, { certSha256, headers: { authorization: `Bearer ${token}` } }));
     } catch (error) {
       if (error.code !== "auth") throw error;
       await login();
-      return http.fetchJson(`${base}${path}`, { certSha256, headers: { authorization: `Bearer ${token}` } });
+      return paced(() => http.fetchJson(`${base}${path}`, { certSha256, headers: { authorization: `Bearer ${token}` } }));
     }
   }
 

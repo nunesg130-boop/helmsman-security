@@ -52,3 +52,9 @@ test("proxmox.backupStorage accepts a per-node map of storage names", () => {
 test("proxmox.backupStorage rejects a map with a non-string value", () => {
   assert.throws(() => parseConfig({ ...minimal, proxmox: { baseUrl: "https://10.0.0.1:8006", tokenId: "a@pve!b", backupStorage: { norco: 3 } } }), /backupStorage/u);
 });
+
+test("wazuh.requestsPerMinute must be a positive number", () => {
+  const w = { baseUrl: "https://10.0.0.2:55000", user: "u" };
+  assert.equal(parseConfig({ ...minimal, wazuh: { ...w, requestsPerMinute: 60 } }).wazuh.requestsPerMinute, 60);
+  assert.throws(() => parseConfig({ ...minimal, wazuh: { ...w, requestsPerMinute: 0 } }), /requestsPerMinute/u);
+});

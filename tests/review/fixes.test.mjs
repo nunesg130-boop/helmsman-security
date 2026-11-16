@@ -188,7 +188,7 @@ test("I6 (revised): an active agent's inventory is current even when unchanged i
   const routes = wazuhRoutes({ "/syscollector/001/packages": page([{ name: "bash", version: "5", scan: { id: 0, time: "2026-10-01T00:00:00Z" } }]) });
   const srv = await startFixtureServer(routes);
   try {
-    const adapter = createWazuh414({ http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "u", password: "p", certSha256: srv.certSha256 });
+    const adapter = createWazuh414({ requestsPerMinute: 0, http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "u", password: "p", certSha256: srv.certSha256 });
     const now = Date.parse("2026-11-12T12:00:00Z");
     const out = await collectWazuh({ adapter, now: () => now });
     assert.equal(out.evidence.find((e) => e.assetKey === "wazuh:agent:001" && e.kind === "wazuh.packages").collectedAt, now);
@@ -200,7 +200,7 @@ test("I6/M1: a future-dated keepalive does not make inventory fresh", async () =
   routes["/agents"].data.affected_items[2].lastKeepAlive = "2030-01-01T00:00:00Z";
   const srv = await startFixtureServer(routes);
   try {
-    const adapter = createWazuh414({ http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "u", password: "p", certSha256: srv.certSha256 });
+    const adapter = createWazuh414({ requestsPerMinute: 0, http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "u", password: "p", certSha256: srv.certSha256 });
     const now = Date.parse("2026-11-12T12:00:00Z");
     const out = await collectWazuh({ adapter, now: () => now });
     const pk = out.evidence.find((e) => e.assetKey === "wazuh:agent:010" && e.kind === "wazuh.packages");

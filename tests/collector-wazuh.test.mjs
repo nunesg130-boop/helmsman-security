@@ -7,10 +7,10 @@ import { startFixtureServer } from "./helpers/fixture-server.mjs";
 import { wazuhRoutes, page } from "./fixtures/wazuh-fixture.mjs";
 
 const NOW = Date.parse("2026-11-12T12:00:00Z");
-async function withAdapter(routes, fn) {
+async function withAdapter(routes, fn, opts = { requestsPerMinute: 0, sleep: async () => {} }) {
   const srv = await startFixtureServer(routes);
   try {
-    const adapter = createWazuh414({ http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "helmsec", password: "pw-secret", certSha256: srv.certSha256 });
+    const adapter = createWazuh414({ http: createHttp({ allowHosts: ["127.0.0.1"] }), baseUrl: srv.url, user: "helmsec", password: "pw-secret", certSha256: srv.certSha256, ...opts });
     return await fn(adapter, srv);
   } finally { await srv.close(); }
 }
@@ -111,5 +111,56 @@ test("os and hardware are fetched without paging parameters (Wazuh rejects them 
     assert.equal((await a.hardware("001")).cores, 6);
     const urls = srv.requests.map((r) => r.url).filter((u) => /\/(os|hardware)/u.test(u));
     assert.ok(urls.length === 2 && urls.every((u) => !/limit|offset/u.test(u)), urls.join(", "));
+  });
+});
+
+test("HTTP 429 (Wazuh rate limit) waits and retries instead of failing", async () => {
+  let calls = 0;
+  const waits = [];
+  const routes = wazuhRoutes({ "/agents": () => (++calls <= 2 ? [429, { title: "Too Many Requests" }] : [200, page([{ id: "001", name: "norco", status: "active" }])]) });
+  await withAdapter(routes, async (a) => {
+    assert.equal((await a.listAgents()).length, 1);
+    assert.equal(calls, 3);
+    assert.equal(waits.length, 2);
+    assert.ok(waits.every((ms) => ms >= 10_000), waits.join(","));
+  }, { requestsPerMinute: 0, sleep: async (ms) => { waits.push(ms); } });
+});
+
+test("HTTP 429 that never clears fails after a bounded number of retries", async () => {
+  let calls = 0;
+  const routes = wazuhRoutes({ "/agents": () => { calls++; return [429, {}]; } });
+  await withAdapter(routes, async (a) => {
+    await assert.rejects(() => a.listAgents(), /429/u);
+    assert.ok(calls >= 2 && calls <= 4, String(calls));
+  });
+});
+
+test("requests are paced to stay under the requests-per-minute budget", async () => {
+  const waits = [];
+  let clock = 0;
+  await withAdapter(wazuhRoutes(), async (a) => {
+    await a.listAgents();
+    await a.os("001");
+    await a.netiface("001");
+    // 120/min = one request every 500 ms; nothing waits longer than one gap
+    assert.ok(waits.length >= 2, String(waits.length));
+    assert.ok(waits.every((ms) => ms > 0 && ms <= 500), waits.join(","));
+  }, { requestsPerMinute: 120, now: () => clock, sleep: async (ms) => { waits.push(ms); clock += ms; } });
+});
+
+test("MACs are kept for linking even when a later inventory table fails", async () => {
+  await withAdapter(wazuhRoutes({ "/syscollector/001/packages": () => [500, {}] }), async (a) => {
+    const out = await collectWazuh({ adapter: a, now: () => NOW });
+    const agent = out.inventory.agents.find((x) => x.id === "001");
+    assert.ok(agent.macs.length > 0, "macs lost");
+  });
+});
+
+test("processes are not fetched, and hotfixes only for Windows agents", async () => {
+  await withAdapter(wazuhRoutes(), async (a, srv) => {
+    await collectWazuh({ adapter: a, now: () => NOW });
+    const urls = srv.requests.map((r) => r.url);
+    assert.ok(!urls.some((u) => /\/processes/u.test(u)), "processes fetched");
+    assert.ok(!urls.some((u) => /\/hotfixes/u.test(u)), "hotfixes fetched for a Linux agent");
   });
 });
