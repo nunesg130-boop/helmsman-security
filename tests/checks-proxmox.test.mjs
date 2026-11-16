@@ -56,3 +56,19 @@ test("backup_storage does not apply without configured storage", () => assert.eq
 
 test("small clock offset is ok", () => assert.equal(run(clockDrift, node, "pve.time", { offsetSeconds: 2 }).state, "ok"));
 test("large clock offset is an issue", () => assert.match(run(clockDrift, node, "pve.time", { offsetSeconds: -9 }).reason, /clock off by 9 s/u));
+
+// Per-node backup storage: norco writes to a local directory, Main to the same drive over NFS.
+const PER_NODE = { thresholds: CONFIG.thresholds, proxmox: { backupStorage: { norco: "backups", Main: "backups-nfs" } } };
+const main = { assetKey: "pve:node:Main", class: "host", name: "Main", sources: { pve: { node: "Main" } } };
+test("per-node storage: each node is checked against its own storage", () => {
+  const listing = [{ storage: "backups", active: 0, enabled: 0, used: 1, total: 10 }, { storage: "backups-nfs", active: 1, enabled: 1, used: 1, total: 10 }];
+  const r = run(backupStorage, main, "pve.storage", listing, PER_NODE);
+  assert.equal(r.state, "ok");
+  assert.match(r.reason, /backups-nfs/u);
+});
+test("per-node storage: a node not in the map is not applicable", () => {
+  const other = { assetKey: "pve:node:q", class: "host", name: "q", sources: { pve: { node: "q" } } };
+  const r = run(backupStorage, other, "pve.storage", st({}), PER_NODE);
+  assert.equal(r.state, "not_applicable");
+  assert.match(r.reason, /no backup storage configured for this node/u);
+});

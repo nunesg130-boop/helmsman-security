@@ -1,6 +1,7 @@
 import { result } from "../states.mjs";
 import { formatAge } from "./runner.mjs";
 import { threshold } from "./thresholds.mjs";
+import { backupStorageFor } from "../config.mjs";
 
 export const backupJobs = {
   id: "backup_jobs",
@@ -24,10 +25,11 @@ export const backupStorage = {
   id: "backup_storage",
   title: "Backup storage available",
   requires: ["pve.storage"],
-  appliesTo: (asset, config) => asset.class === "host" && Boolean(asset.sources?.pve?.node) && Boolean(config?.proxmox?.backupStorage),
-  notApplicableReason: () => "no backup storage configured",
-  evaluate({ "pve.storage": ev }, { config }) {
-    const id = config.proxmox.backupStorage;
+  appliesTo: (asset, config) => asset.class === "host" && Boolean(asset.sources?.pve?.node) && Boolean(backupStorageFor(config?.proxmox, asset.sources.pve.node)),
+  notApplicableReason: (asset, config) => (asset.class === "host" && config?.proxmox?.backupStorage && typeof config.proxmox.backupStorage === "object"
+    ? "no backup storage configured for this node" : "no backup storage configured"),
+  evaluate({ "pve.storage": ev }, { config, asset }) {
+    const id = backupStorageFor(config.proxmox, asset.sources.pve.node);
     const s = (Array.isArray(ev.value) ? ev.value : []).find((x) => x.storage === id);
     if (!s) return result("issue", `backup storage ${id} missing on this node`);
     if (Number(s.enabled) === 0) return result("issue", `backup storage ${id} disabled`);

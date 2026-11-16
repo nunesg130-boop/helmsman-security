@@ -43,6 +43,11 @@ export function parseConfig(raw) {
   need(isStr(c.owner.authentikUser), "owner.authentikUser is required");
   need(isStr(c.owner.adminOrigin ?? "x"), "owner.adminOrigin must be a string");
   if (c.proxmox) need(isStr(c.proxmox.baseUrl) && isStr(c.proxmox.tokenId), "proxmox needs baseUrl and tokenId");
+  if (c.proxmox?.backupStorage != null) {
+    const bs = c.proxmox.backupStorage;
+    need(isStr(bs) || (typeof bs === "object" && !Array.isArray(bs) && Object.values(bs).every(isStr)),
+      "proxmox.backupStorage must be a storage name or a map of node name to storage name");
+  }
   if (c.wazuh) need(isStr(c.wazuh.baseUrl) && isStr(c.wazuh.user), "wazuh needs baseUrl and user");
   need(Array.isArray(c.docker), "docker must be a list");
   c.docker.forEach((d, i) => need(isStr(d?.name) && isStr(d?.baseUrl) && isStr(d?.assetKey), `docker[${i}] needs name, baseUrl and assetKey`));
@@ -51,6 +56,15 @@ export function parseConfig(raw) {
   need(Array.isArray(c.eol.products) && c.eol.products.every(isStr), "eol.products must be a list of product slugs");
   need(Array.isArray(c.assets.roaming) && Array.isArray(c.assets.appliances), "assets.roaming and assets.appliances must be lists");
   return c;
+}
+
+// The backup storage to check on one node: a single name applies to every node,
+// a map names each node's own storage (e.g. local directory on one, NFS on another).
+export function backupStorageFor(proxmox, node) {
+  const bs = proxmox?.backupStorage;
+  if (typeof bs === "string") return bs || null;
+  if (bs && typeof bs === "object" && Object.hasOwn(bs, node)) return bs[node] || null;
+  return null;
 }
 
 export function loadConfig(file) {

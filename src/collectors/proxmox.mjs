@@ -1,6 +1,7 @@
 // Read-only Proxmox VE collector. Uses a PVEAuditor API token. Every call is
 // a GET under /api2/json. One node failing is a warning (its evidence ages
 // out to unknown); an auth failure fails the whole run.
+import { backupStorageFor } from "../config.mjs";
 const MAC = /(?:^|,)(?:[a-z0-9]+=)?([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})(?:,|$)/u;
 const HWADDR = /(?:^|,)hwaddr=([0-9A-Fa-f:]{17})/u;
 const STATIC_IP = /(?:^|,)ip=(\d{1,3}(?:\.\d{1,3}){3})\/\d+/u;
@@ -82,8 +83,9 @@ export async function collectProxmox({ http, cfg, secret, now = Date.now }) {
       evidence.push({ assetKey: key, kind: "pve.disks", value: (await get(`/nodes/${node.name}/disks/list`)) ?? [] });
       const storage = (await get(`/nodes/${node.name}/storage`)) ?? [];
       evidence.push({ assetKey: key, kind: "pve.storage", value: storage.map((s) => ({ storage: s.storage, active: s.active, enabled: s.enabled ?? 1, used: s.used, total: s.total, shared: s.shared })) });
-      if (cfg.backupStorage && storage.some((s) => s.storage === cfg.backupStorage && Number(s.active) === 1)) {
-        const content = (await get(`/nodes/${node.name}/storage/${encodeURIComponent(cfg.backupStorage)}/content?content=backup`)) ?? [];
+      const backupStore = backupStorageFor(cfg, node.name);
+      if (backupStore && storage.some((s) => s.storage === backupStore && Number(s.active) === 1)) {
+        const content = (await get(`/nodes/${node.name}/storage/${encodeURIComponent(backupStore)}/content?content=backup`)) ?? [];
         // Usually empty for a read-only token; counted when Proxmox shows it.
         for (const c of content) {
           const vmid = Number(c.vmid);

@@ -44,3 +44,11 @@ test("loadConfig reads a JSON file", () => {
   writeFileSync(f, JSON.stringify(minimal));
   assert.equal(loadConfig(f).owner.authentikUser, "owner");
 });
+
+test("proxmox.backupStorage accepts a per-node map of storage names", () => {
+  const c = parseConfig({ ...minimal, proxmox: { baseUrl: "https://10.0.0.1:8006", tokenId: "a@pve!b", backupStorage: { norco: "x", Main: "y" } } });
+  assert.deepEqual(c.proxmox.backupStorage, { norco: "x", Main: "y" });
+});
+test("proxmox.backupStorage rejects a map with a non-string value", () => {
+  assert.throws(() => parseConfig({ ...minimal, proxmox: { baseUrl: "https://10.0.0.1:8006", tokenId: "a@pve!b", backupStorage: { norco: 3 } } }), /backupStorage/u);
+});
