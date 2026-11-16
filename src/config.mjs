@@ -49,6 +49,7 @@ export function parseConfig(raw) {
       "proxmox.backupStorage must be a storage name or a map of node name to storage name");
   }
   if (c.wazuh) need(isStr(c.wazuh.baseUrl) && isStr(c.wazuh.user), "wazuh needs baseUrl and user");
+  if (c.wazuh?.requestsPerMinute != null) need(Number.isFinite(c.wazuh.requestsPerMinute) && c.wazuh.requestsPerMinute > 0, "wazuh.requestsPerMinute must be a positive number");
   need(Array.isArray(c.docker), "docker must be a list");
   c.docker.forEach((d, i) => need(isStr(d?.name) && isStr(d?.baseUrl) && isStr(d?.assetKey), `docker[${i}] needs name, baseUrl and assetKey`));
   need(Array.isArray(c.network), "network must be a list");

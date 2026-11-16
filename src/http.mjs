@@ -72,7 +72,7 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
       const req = lib.request(u, opts, (res) => {
         const status = res.statusCode ?? 0;
         if (status === 401 || status === 403) { res.resume(); return fail(new CollectorError("auth", `HTTP ${status}`)); }
-        if (status < 200 || status >= 300) { res.resume(); return fail(new CollectorError("http", `HTTP ${status}`)); }
+        if (status < 200 || status >= 300) { res.resume(); return fail(Object.assign(new CollectorError("http", `HTTP ${status}`), { status })); }
         const chunks = [];
         let size = 0;
         res.on("data", (c) => {

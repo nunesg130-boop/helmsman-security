@@ -2,12 +2,12 @@
 // by the manager is only as fresh as the agent's last check-in, so for an
 // agent that isn't active it's dated at lastKeepAlive (not "now") and ages
 // out to unknown on its own.
+// Processes aren't used by any check, and hotfixes only exist on Windows;
+// skipping them keeps each cycle well inside the Wazuh API's request budget.
 const KINDS = [
   ["os", "wazuh.os"],
   ["packages", "wazuh.packages"],
-  ["hotfixes", "wazuh.hotfixes"],
   ["ports", "wazuh.ports"],
-  ["processes", "wazuh.processes"],
   ["hardware", "wazuh.hardware"]
 ];
 
@@ -29,10 +29,17 @@ export async function collectWazuh({ adapter, now = Date.now }) {
       const baseAt = agent.status === "active" ? t : keepAlive;
       const datedAt = () => baseAt;
       try {
+        // MACs first: they link the agent to its machine, so keep them even
+        // if a later table fails.
+        macs = (await adapter.netiface(agent.id)).macs;
         const got = {};
         for (const [method] of KINDS) got[method] = await adapter[method](agent.id);
-        macs = (await adapter.netiface(agent.id)).macs;
-        for (const [method, kind] of KINDS) {
+        const kinds = [...KINDS];
+        if (got.os?.platform === "windows") {
+          got.hotfixes = await adapter.hotfixes(agent.id);
+          kinds.push(["hotfixes", "wazuh.hotfixes"]);
+        }
+        for (const [method, kind] of kinds) {
           if (got[method] != null) evidence.push({ assetKey: key, kind, value: got[method], collectedAt: datedAt(method) });
         }
       } catch (error) {

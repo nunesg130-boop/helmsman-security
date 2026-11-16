@@ -85,7 +85,7 @@ async function labCycle() {
   };
   const sources = {
     proxmox: () => collectProxmox({ http, cfg: { baseUrl: pve.url, tokenId: "t@pam!x", certSha256: pve.certSha256, backupStorage: "backups" }, secret: "s", now: () => NOW }),
-    wazuh: () => collectWazuh({ adapter: createWazuh414({ http, baseUrl: wz.url, user: "u", password: "p", certSha256: wz.certSha256 }), now: () => NOW })
+    wazuh: () => collectWazuh({ adapter: createWazuh414({ requestsPerMinute: 0, http, baseUrl: wz.url, user: "u", password: "p", certSha256: wz.certSha256 }), now: () => NOW })
   };
   const fixture = (slug) => JSON.parse(readFileSync(new URL(`./fixtures/eol/${slug}.json`, import.meta.url)));
   try {

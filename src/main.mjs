@@ -84,7 +84,7 @@ export async function start({
   if (config.proxmox) sources.proxmox = () => collectProxmox({ http, cfg: config.proxmox, secret: requireCredential(credentials, "proxmox.tokenSecret"), now });
   if (config.wazuh) {
     sources.wazuh = () => collectWazuh({
-      adapter: createWazuh414({ http, baseUrl: config.wazuh.baseUrl, user: config.wazuh.user, password: requireCredential(credentials, "wazuh.password"), certSha256: config.wazuh.certSha256 }),
+      adapter: createWazuh414({ http, baseUrl: config.wazuh.baseUrl, user: config.wazuh.user, password: requireCredential(credentials, "wazuh.password"), certSha256: config.wazuh.certSha256, requestsPerMinute: config.wazuh.requestsPerMinute ?? 120 }),
       now
     });
   }
