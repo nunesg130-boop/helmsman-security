@@ -4,9 +4,9 @@ import { HOST_CLASSES } from "./runner.mjs";
 
 // Debian/Proxmox kernel packages carry the full release in the name, e.g.
 // proxmox-kernel-6.8.12-4-pve-signed, pve-kernel-5.15.108-1-pve,
-// linux-image-6.1.0-26-amd64. Meta packages (proxmox-kernel-6.8,
+// linux-image-6.1.0-26-amd64, linux-image-6.12.48+deb13-amd64 (Debian 13). Meta packages (proxmox-kernel-6.8,
 // linux-image-amd64) don't match because they lack the x.y.z-n release.
-const DEB_KERNEL = /^(?:linux-image|proxmox-kernel|pve-kernel)-(\d+\.\d+\.\d+-[\w.+-]+?)(?:-signed)?$/u;
+const DEB_KERNEL = /^(?:linux-image|proxmox-kernel|pve-kernel)-(\d+\.\d+\.\d+[-+][\w.+-]+?)(?:-signed)?$/u;
 
 export function newestKernel(packages, platform) {
   const releases = [];
