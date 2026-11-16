@@ -62,14 +62,22 @@ test("wazuh.requestsPerMinute must be a positive number", () => {
 const WZ = { baseUrl: "https://10.0.0.2:55000", user: "u" };
 test("wazuh.indexer needs baseUrl and user", () => {
   assert.throws(() => parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { baseUrl: "https://10.0.0.2:9200" } } }), /indexer/u);
-  assert.equal(parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { baseUrl: "https://10.0.0.2:9200", user: "ro" } } }).wazuh.indexer.user, "ro");
+  assert.equal(parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { baseUrl: "https://10.0.0.2:9200", user: "ro", certSha256: "ab".repeat(32) } } }).wazuh.indexer.user, "ro");
 });
 test("egress includes the indexer and feed hosts only when an indexer is configured", () => {
   assert.ok(!egressHosts(parseConfig({ ...minimal, wazuh: WZ })).allowHosts.includes("www.cisa.gov"));
-  const hosts = egressHosts(parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { baseUrl: "https://10.0.0.9:9200", user: "ro" } } })).allowHosts;
+  const hosts = egressHosts(parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { baseUrl: "https://10.0.0.9:9200", user: "ro", certSha256: "ab".repeat(32) } } })).allowHosts;
   for (const h of ["10.0.0.9", "www.cisa.gov", "epss.empiricalsecurity.com"]) assert.ok(hosts.includes(h), h);
 });
 test("defaults include the vulnerability thresholds", () => {
   const t = parseConfig(minimal).thresholds;
   assert.deepEqual([t.vulnsRefreshMinutes, t.threatFeedRefreshHours, t.threatFeedMaxAgeDays], [60, 24, 7]);
+});
+
+test("the indexer must be https, pinned, and its user can't contain a colon", () => {
+  const ix = { baseUrl: "https://10.0.0.9:9201", user: "ro", certSha256: "ab".repeat(32) };
+  assert.equal(parseConfig({ ...minimal, wazuh: { ...WZ, indexer: ix } }).wazuh.indexer.user, "ro");
+  assert.throws(() => parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { ...ix, baseUrl: "http://10.0.0.9:9201" } } }), /https/u);
+  assert.throws(() => parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { ...ix, certSha256: undefined } } }), /certSha256/u);
+  assert.throws(() => parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { ...ix, user: "a:b" } } }), /colon/u);
 });

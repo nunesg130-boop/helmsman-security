@@ -56,6 +56,9 @@ export function parseConfig(raw) {
   if (c.wazuh?.indexer != null) {
     const ix = c.wazuh.indexer;
     need(isStr(ix.baseUrl) && isStr(ix.user), "wazuh.indexer needs baseUrl and user");
+    need(/^https:\/\//u.test(ix.baseUrl), "wazuh.indexer.baseUrl must be https");
+    need(isStr(ix.certSha256), "wazuh.indexer needs certSha256 (the indexer's certificate fingerprint)");
+    need(!ix.user.includes(":"), "wazuh.indexer.user can't contain a colon");
     if (ix.requestsPerMinute != null) need(Number.isFinite(ix.requestsPerMinute) && ix.requestsPerMinute > 0, "wazuh.indexer.requestsPerMinute must be a positive number");
   }
   need(Array.isArray(c.docker), "docker must be a list");

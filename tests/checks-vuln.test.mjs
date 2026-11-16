@@ -7,7 +7,7 @@ import { HoldStore } from "../src/holds.mjs";
 import { memoryStore, putOk, noHolds } from "./helpers/stores.mjs";
 
 const NOW = 50_000_000;
-const CONFIG = { wazuh: { baseUrl: "https://w:55000", user: "u", indexer: { baseUrl: "https://w:9200", user: "ro" } } };
+const CONFIG = { wazuh: { baseUrl: "https://w:55000", user: "u", indexer: { baseUrl: "https://w:9200", user: "ro", certSha256: "ab" } } };
 const asset = { assetKey: "pve:guest:100", class: "guest", name: "Jelly-Arr", sources: { pve: { vmid: 100 }, wazuh: { id: "010" } } };
 function store({ status = "active", scan = { count: 9256, newestDetectedAt: NOW - 1000 }, scanAt = NOW } = {}) {
   const s = memoryStore();

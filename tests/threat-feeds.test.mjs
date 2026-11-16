@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { parseKev, parseEpssCsvGz, refreshThreatFeeds } from "../src/collectors/threat-feeds.mjs";
+import { parseKev, parseEpssCsvGz, refreshThreatFeeds, kevContentDate, epssContentDate } from "../src/collectors/threat-feeds.mjs";
 import { FindingStore } from "../src/vuln/findings.mjs";
 import { openDb } from "../src/db.mjs";
 import { createHttp } from "../src/http.mjs";
@@ -61,4 +61,34 @@ test("an implausibly small feed is rejected (error page or truncated file)", asy
 test("when both feeds fail the run fails", async () => {
   const { error } = await run({ "/kev.json": () => [500, "x"], "/epss.csv.gz": () => [500, "x"] });
   assert.match(error.message, /KEV.*EPSS/su);
+});
+
+test("each feed's own date is read: KEV dateReleased, EPSS score_date", () => {
+  assert.equal(kevContentDate({ dateReleased: "2026-11-14T15:00:00.0000Z" }), Date.parse("2026-11-14T15:00:00Z"));
+  assert.equal(kevContentDate({}), null);
+  assert.equal(epssContentDate(epssCsv(1)), Date.parse("2026-11-15T00:00:00+0000"));
+  assert.equal(epssContentDate(gzipSync(Buffer.from("cve,epss,percentile\n"))), null);
+});
+
+test("a freshly downloaded feed whose own date is old is not accepted as current", async () => {
+  const oldKev = { ...kevDoc(3), dateReleased: "2026-01-01T00:00:00Z" };
+  const srv = await startFixtureServer({ "/kev.json": oldKev, "/epss.csv.gz": () => [200, epssCsv(3)] });
+  const findings = new FindingStore(openDb(":memory:"), "t");
+  try {
+    const now = Date.parse("2026-11-16T12:00:00Z");
+    const out = await refreshThreatFeeds({ http: createHttp({ allowHosts: ["127.0.0.1"] }), findings, now: () => now, kevUrl: `${srv.url}/kev.json`, epssUrl: `${srv.url}/epss.csv.gz`, certSha256: srv.certSha256, minKev: 2, minEpss: 2, maxContentAgeMs: 7 * 86400_000 });
+    assert.equal(findings.feed("kev"), null);
+    assert.ok(out.warnings.some((w) => /KEV.*released 2026-01-01/u.test(w)), out.warnings.join());
+    assert.deepEqual(findings.feed("epss"), { fetchedAt: now, count: 3 });
+  } finally { await srv.close(); }
+});
+
+test("feed error text is redacted before it is stored", async () => {
+  const srv = await startFixtureServer({ "/kev.json": () => [500, "x"], "/epss.csv.gz": () => [200, epssCsv(3)] });
+  const findings = new FindingStore(openDb(":memory:"), "t");
+  try {
+    const out = await refreshThreatFeeds({ http: { fetchJson: async () => { throw new Error("failed with password=hunter2 in it"); }, fetchBuffer: (u, o) => createHttp({ allowHosts: ["127.0.0.1"] }).fetchBuffer(u, o) },
+      findings, now: () => 5000, kevUrl: `${srv.url}/kev.json`, epssUrl: `${srv.url}/epss.csv.gz`, certSha256: srv.certSha256, minKev: 2, minEpss: 2, secrets: ["hunter2"] });
+    assert.ok(!JSON.stringify(out).includes("hunter2"));
+  } finally { await srv.close(); }
 });

@@ -1,5 +1,7 @@
 // Each task runs immediately, then again `everyMs` after it finishes, so a
-// slow run never overlaps itself. stop() waits for in-flight runs.
+// slow run never overlaps itself. A run that throws or reports
+// { status: "failed" } is retried after `retryMs` when the task has one.
+// stop() waits for in-flight runs.
 export function startScheduler({ tasks, onError = (name, e) => console.error(`[scheduler] ${name}: ${e.message}`), setTimer = setTimeout, clearTimer = clearTimeout }) {
   let stopped = false;
   const timers = new Map();
@@ -13,10 +15,10 @@ export function startScheduler({ tasks, onError = (name, e) => console.error(`[s
   function tick(task) {
     if (stopped) return;
     const p = (async () => {
-      try { await task.run(); } catch (e) { onError(task.name, e); }
+      try { return (await task.run())?.status === "failed"; } catch (e) { onError(task.name, e); return true; }
     })();
     inflight.add(p);
-    p.finally(() => { inflight.delete(p); schedule(task, task.everyMs); });
+    p.then((failed) => { inflight.delete(p); schedule(task, failed && task.retryMs ? task.retryMs : task.everyMs); });
   }
 
   for (const t of tasks) tick(t);
