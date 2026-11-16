@@ -25,7 +25,7 @@ export async function startFixtureServer(routes, { tls = true } = {}) {
       let headers = {};
       if (typeof route === "function") [status, body, headers = {}] = await route(req, text);
       else if (route !== undefined) [status, body] = [200, route];
-      const payload = typeof body === "string" ? body : JSON.stringify(body);
+      const payload = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body);
       res.writeHead(status, { "content-type": "application/json", ...headers });
       res.end(payload);
     });

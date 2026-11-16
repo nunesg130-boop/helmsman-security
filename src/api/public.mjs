@@ -2,12 +2,16 @@ import https from "node:https";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { LedgerStore } from "../ledger.mjs";
 import { evidenceKey } from "../checks/runner.mjs";
+import { FindingStore } from "../vuln/findings.mjs";
+import { VULN_COLLECTOR } from "../vuln/cycle.mjs";
 
 // Read-only API for Helmsman. GET only, bearer token required on every
 // route, bounded responses, no admin functions on this port at all.
 const MAX_BODY = 1024 * 1024;
 const MAX_SOFTWARE = 2000;
 const STATE_KEYS = ["ok", "issue", "unknown", "not_applicable", "excluded"];
+const FIX_STATES = new Set(["fix-available-not-applied", "no-fix-exists", "unknown"]);
+const SEVERITIES = new Set(["critical", "high", "medium", "low", "unknown"]);
 const digest = (s) => createHash("sha256").update(String(s)).digest();
 
 function send(res, status, body) {
@@ -23,8 +27,30 @@ function paginate(items, url) {
   return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: items.length };
 }
 
-export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, now = Date.now }) {
+export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, vulnStaleAfterMs = 3 * 3600_000, maxFeedAgeMs = 7 * 86400_000, now = Date.now }) {
   const ledger = new LedgerStore(db, tenantId);
+  const findings = new FindingStore(db, tenantId);
+
+  // Findings are only as current as the last successful vulnerability read.
+  function vulnMeta() {
+    const run = store.lastRun(VULN_COLLECTOR);
+    const last = run?.lastSuccessAt ?? null;
+    const t = now();
+    const fresh = findings.freshness({ now: t, maxFeedAgeMs });
+    return {
+      collection: { status: run?.status ?? "never_run", lastSuccessAt: last, lastError: run?.status === "failed" ? run.error : null },
+      findingsStale: last == null || t - last > vulnStaleAfterMs || last > t + 60_000 || run.status === "failed",
+      feeds: { kev: findings.feed("kev"), epss: findings.feed("epss") },
+      kevStale: !fresh.kev,
+      epssStale: !fresh.epss,
+      threatDataStale: !(fresh.kev && fresh.epss)
+    };
+  }
+  const assetNames = () => new Map(db.prepare("SELECT asset_key, name FROM assets WHERE tenant_id = ?").all(tenantId).map((a) => [a.asset_key, a.name]));
+  const intParam = (url, name, fallback, max) => {
+    const n = Number.parseInt(url.searchParams.get(name) ?? "", 10);
+    return Math.min(max, Math.max(0, Number.isFinite(n) ? n : fallback));
+  };
 
   function authorized(req) {
     const expected = credentials.get("api.readToken");
@@ -82,6 +108,32 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
     },
     "/api/v1/issues": (url) => [200, paginate(rowsNow().filter((r) => r.state === "issue").map(brief), url)],
     "/api/v1/unknowns": (url) => [200, paginate(rowsNow().filter((r) => r.state === "unknown").map((r) => ({ ...brief(r), roaming: r.roaming })), url)],
+    "/api/v1/vulnerabilities": (url) => {
+      const q = url.searchParams;
+      const fix = q.get("fix");
+      const severity = q.get("severity");
+      const kev = q.get("kev");
+      if (fix && !FIX_STATES.has(fix)) return [400, { error: "fix must be fix-available-not-applied, no-fix-exists or unknown" }];
+      if (severity && !SEVERITIES.has(severity)) return [400, { error: "severity must be critical, high, medium, low or unknown" }];
+      if (kev && kev !== "true" && kev !== "false") return [400, { error: "kev must be true or false" }];
+      const meta = vulnMeta();
+      if (kev && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so findings can't be filtered by it", ...meta }];
+      const limit = Math.max(1, intParam(url, "limit", 50, 200));
+      const offset = intParam(url, "offset", 0, Number.MAX_SAFE_INTEGER);
+      const { items, total } = findings.list({ assetKey: q.get("asset") || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined, limit, offset }, { now: now(), maxFeedAgeMs });
+      const names = assetNames();
+      return [200, { items: items.map((i) => ({ ...i, assetName: names.get(i.assetKey) ?? i.assetKey })), total, limit, offset, ...meta }];
+    },
+    "/api/v1/vulnerabilities/summary": () => {
+      const names = assetNames();
+      const assets = findings.summaryByAsset({ now: now(), maxFeedAgeMs }).map((a) => ({ ...a, assetName: names.get(a.assetKey) ?? a.assetKey }));
+      const totals = { total: 0, critical: 0, high: 0, medium: 0, low: 0, unknownSeverity: 0, fixAvailable: 0, noFix: 0, fixUnknown: 0, lowConfidence: 0, unrecognisedCondition: 0 };
+      for (const a of assets) for (const k of Object.keys(totals)) totals[k] += a[k];
+      const meta = vulnMeta();
+      totals.kev = meta.kevStale ? null : assets.reduce((n, a) => n + (a.kev ?? 0), 0);
+      // Never read successfully: there are no figures to give, not zeros.
+      return [200, { assets, totals: meta.collection.lastSuccessAt == null ? null : totals, ...meta }];
+    },
     "/api/v1/assets": (url) => {
       const counts = new Map();
       for (const r of rowsNow()) {

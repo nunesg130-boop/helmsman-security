@@ -22,7 +22,7 @@ export function createSecretBox(key) {
   };
 }
 
-export const CREDENTIAL_NAMES = Object.freeze(["proxmox.tokenSecret", "wazuh.password", "api.readToken"]);
+export const CREDENTIAL_NAMES = Object.freeze(["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "api.readToken"]);
 
 export class CredentialStore {
   constructor(db, tenantId, box) {

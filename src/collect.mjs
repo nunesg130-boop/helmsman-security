@@ -25,6 +25,9 @@ export async function runCollector(store, name, fn, { now = Date.now, staleAfter
   const db = store.db;
   db.exec("BEGIN IMMEDIATE");
   try {
+    // A collector's own writes (e.g. findings) join the evidence transaction:
+    // both are stored, or neither. A run that failed or timed out never gets here.
+    output?.commit?.();
     for (const e of output?.evidence ?? []) {
       store.put(runId, { staleAfterMs, ...e, collectedAt: e.collectedAt ?? now() });
     }

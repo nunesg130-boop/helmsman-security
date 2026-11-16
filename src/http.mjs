@@ -49,7 +49,11 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
   const httpsHosts = new Set(allowHosts.map((h) => h.toLowerCase()));
   const plainHosts = new Set(allowHttpHosts.map((h) => h.toLowerCase()));
 
-  function fetchJson(url, { method = "GET", headers = {}, body, timeoutMs = 10_000, deadlineMs = timeoutMs * 3, maxBytes = 5_000_000, certSha256 } = {}) {
+  // Raw bytes, with the same egress, pinning, status and size rules.
+  // A GET may be redirected within the same host (e.g. "latest" -> a dated
+  // file), at most three times. Redirects to another host are refused.
+  function fetchBuffer(url, options = {}) {
+    const { method = "GET", headers = {}, body, timeoutMs = 10_000, deadlineMs = timeoutMs * 3, maxBytes = 50_000_000, certSha256, redirects = 0 } = options;
     return new Promise((resolve, reject) => {
       let u;
       try { u = new URL(url); } catch { return reject(new CollectorError("egress_denied", "invalid URL")); }
@@ -61,7 +65,10 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
         return reject(new CollectorError("egress_denied", `${method} ${u.pathname} is not allowed (read-only engine)`));
       }
       const lib = u.protocol === "https:" ? https : http;
-      const opts = { method, headers: { accept: "application/json", ...headers } };
+      // A GET may carry a JSON body (search queries); it still changes nothing.
+      // Node sends no body on a GET unless its length is declared.
+      const payload = body === undefined ? null : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
+      const opts = { method, headers: { accept: "application/json", ...(payload ? { "content-type": "application/json", "content-length": payload.length } : {}), ...headers } };
       if (u.protocol === "https:") {
         if (certSha256) opts.agent = pinnedAgent(normFp(certSha256), timeoutMs);
         else opts.rejectUnauthorized = true;
@@ -72,6 +79,18 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
       const req = lib.request(u, opts, (res) => {
         const status = res.statusCode ?? 0;
         if (status === 401 || status === 403) { res.resume(); return fail(new CollectorError("auth", `HTTP ${status}`)); }
+        if ([301, 302, 303, 307, 308].includes(status)) {
+          res.resume();
+          let next = null;
+          try { next = new URL(res.headers.location ?? "", u); } catch { /* handled below */ }
+          if (!next || method !== "GET" || payload || next.host !== u.host || next.protocol !== u.protocol) {
+            return fail(Object.assign(new CollectorError("http", `HTTP ${status} redirect not followed`), { status }));
+          }
+          if (redirects >= 3) return fail(Object.assign(new CollectorError("http", "too many redirects"), { status }));
+          settled = true;
+          clearTimeout(deadline);
+          return resolve(fetchBuffer(next.href, { ...options, redirects: redirects + 1 }));
+        }
         if (status < 200 || status >= 300) { res.resume(); return fail(Object.assign(new CollectorError("http", `HTTP ${status}`), { status })); }
         const chunks = [];
         let size = 0;
@@ -82,14 +101,9 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
         });
         res.on("end", () => {
           if (settled) return;
-          try {
-            settled = true;
-            clearTimeout(deadline);
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch {
-            clearTimeout(deadline);
-            reject(new CollectorError("parse", "response was not valid JSON"));
-          }
+          settled = true;
+          clearTimeout(deadline);
+          resolve(Buffer.concat(chunks));
         });
         res.on("error", (e) => fail(new CollectorError("network", e.message)));
       });
@@ -101,10 +115,16 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
         const code = /certificate|self[- ]signed|SSL|TLS/iu.test(`${e.code} ${e.message}`) ? "tls" : "network";
         fail(new CollectorError(code, redact(`${e.code ?? ""} ${e.message}`.trim())));
       });
-      if (body !== undefined) req.write(typeof body === "string" ? body : JSON.stringify(body));
+      if (payload) req.write(payload);
       req.end();
     });
   }
 
-  return { fetchJson };
+  async function fetchJson(url, options = {}) {
+    const buf = await fetchBuffer(url, { maxBytes: 5_000_000, ...options });
+    try { return JSON.parse(buf.toString("utf8")); }
+    catch { throw new CollectorError("parse", "response was not valid JSON"); }
+  }
+
+  return { fetchJson, fetchBuffer };
 }

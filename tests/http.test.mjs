@@ -89,3 +89,43 @@ test("redact strips PVEAPIToken, bearer, url credentials and given secrets", () 
   const out = redact(text, ["mysecretvalue"]);
   for (const s of ["11111111-2222", "eyJabc", "hunter2", "user:pw", "mysecretvalue"]) assert.ok(!out.includes(s), `${s} leaked: ${out}`);
 });
+
+test("fetchBuffer returns the exact bytes", async () => {
+  const bytes = Buffer.from([0x1f, 0x8b, 0x00, 0xff, 0x10]);
+  const srv = await startFixtureServer({ "/b": () => [200, bytes] });
+  try {
+    const http = createHttp({ allowHosts: ["127.0.0.1"] });
+    assert.deepEqual(await http.fetchBuffer(`${srv.url}/b`, { certSha256: srv.certSha256 }), bytes);
+  } finally { await srv.close(); }
+});
+test("fetchBuffer enforces the size cap and the allowlist", async () => {
+  const srv = await startFixtureServer({ "/b": () => [200, Buffer.alloc(5000)] });
+  try {
+    const http = createHttp({ allowHosts: ["127.0.0.1"] });
+    await assert.rejects(http.fetchBuffer(`${srv.url}/b`, { certSha256: srv.certSha256, maxBytes: 1000 }), (e) => e.code === "too_large");
+    await assert.rejects(createHttp({}).fetchBuffer(`${srv.url}/b`), (e) => e.code === "egress_denied");
+  } finally { await srv.close(); }
+});
+test("a GET may carry a JSON body (search queries); other methods stay refused", async () => {
+  const srv = await startFixtureServer({ "/s": (req, text) => [200, { got: JSON.parse(text), type: req.headers["content-type"] }] });
+  try {
+    const http = createHttp({ allowHosts: ["127.0.0.1"] });
+    assert.deepEqual(await http.fetchJson(`${srv.url}/s`, { certSha256: srv.certSha256, body: { size: 1 } }), { got: { size: 1 }, type: "application/json" });
+    await assert.rejects(http.fetchJson(`${srv.url}/s`, { method: "POST", body: {} }), (e) => e.code === "egress_denied");
+  } finally { await srv.close(); }
+});
+
+test("a same-host redirect is followed; a redirect elsewhere or a redirect loop is refused", async () => {
+  const srv = await startFixtureServer({
+    "/latest.gz": () => [302, "", { location: "dated.gz" }],
+    "/dated.gz": () => [200, Buffer.from("abc")],
+    "/away": () => [302, "", { location: "https://example.org/x" }],
+    "/loop": () => [302, "", { location: "/loop" }]
+  });
+  try {
+    const http = createHttp({ allowHosts: ["127.0.0.1", "example.org"] });
+    assert.equal((await http.fetchBuffer(`${srv.url}/latest.gz`, { certSha256: srv.certSha256 })).toString(), "abc");
+    await assert.rejects(http.fetchBuffer(`${srv.url}/away`, { certSha256: srv.certSha256 }), (e) => e.code === "http" && /redirect/u.test(e.message));
+    await assert.rejects(http.fetchBuffer(`${srv.url}/loop`, { certSha256: srv.certSha256 }), (e) => e.code === "http" && /redirect/u.test(e.message));
+  } finally { await srv.close(); }
+});

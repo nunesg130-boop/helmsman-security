@@ -1,3 +1,5 @@
+import { createPacer } from "./pacing.mjs";
+
 // Wazuh 4.14 adapter. The rest of the engine only sees this normalized
 // contract, so moving to Wazuh 5.x means writing wazuh5.mjs with the same
 // methods and shapes:
@@ -29,32 +31,11 @@ export function parseScanTime(v) {
 }
 
 // The Wazuh API allows a fixed number of requests per minute (300 by default,
-// shared with the dashboard). Requests are paced under that budget, and an
-// HTTP 429 waits and retries a bounded number of times.
-const RETRY_429_MS = [15_000, 30_000, 45_000];
-const realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-export function createWazuh414({ http, baseUrl, user, password, certSha256, requestsPerMinute = 120, sleep = realSleep, now = Date.now }) {
+// shared with the dashboard), so requests go through a pacer.
+export function createWazuh414({ http, baseUrl, user, password, certSha256, requestsPerMinute = 120, sleep, now }) {
   const base = baseUrl.replace(/\/+$/u, "");
   let token = null;
-  const gapMs = requestsPerMinute > 0 ? 60_000 / requestsPerMinute : 0;
-  let lastAt = -Infinity;
-
-  async function paced(fn) {
-    for (let attempt = 0; ; attempt++) {
-      if (gapMs) {
-        const wait = lastAt + gapMs - now();
-        if (wait > 0) await sleep(wait);
-        lastAt = now();
-      }
-      try {
-        return await fn();
-      } catch (error) {
-        if (error.status !== 429 || attempt >= RETRY_429_MS.length) throw error;
-        await sleep(RETRY_429_MS[attempt]);
-      }
-    }
-  }
+  const paced = createPacer({ requestsPerMinute, sleep, now });
   const scans = new Map(); // `${id}/${table}` -> newest scan time (ms)
 
   async function login() {

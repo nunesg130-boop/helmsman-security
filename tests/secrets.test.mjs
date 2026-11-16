@@ -44,3 +44,8 @@ test("master key: hex file with 0600 accepted, world-readable refused", () => {
   chmodSync(file, 0o644);
   assert.throws(() => loadMasterKey(file), /readable/u);
 });
+
+test("the indexer password is a known credential", async () => {
+  const { CREDENTIAL_NAMES } = await import("../src/secrets.mjs");
+  assert.ok(CREDENTIAL_NAMES.includes("wazuh.indexerPassword"));
+});

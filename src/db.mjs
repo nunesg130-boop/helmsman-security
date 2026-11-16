@@ -84,6 +84,54 @@ const MIGRATIONS = [
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (tenant_id, name)
   );
+  `,
+  // v2: vulnerability findings and threat feeds
+  `
+  CREATE TABLE findings (
+    tenant_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    asset_key TEXT NOT NULL,
+    cve TEXT NOT NULL,
+    pkg_name TEXT NOT NULL,
+    pkg_version TEXT NOT NULL,
+    pkg_arch TEXT NOT NULL,
+    pkg_type TEXT,
+    severity TEXT NOT NULL,
+    cvss REAL,
+    fix_state TEXT NOT NULL CHECK (fix_state IN ('fix-available-not-applied','no-fix-exists','unknown')),
+    fixed_version TEXT,
+    low_confidence INTEGER NOT NULL DEFAULT 0,
+    condition TEXT,
+    recognised_condition INTEGER NOT NULL DEFAULT 0,
+    detected_at INTEGER,
+    first_seen_at INTEGER NOT NULL,
+    last_confirmed_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch)
+  );
+  CREATE INDEX findings_by_asset ON findings (tenant_id, asset_key);
+  CREATE INDEX findings_by_cve ON findings (tenant_id, cve);
+
+  CREATE TABLE kev (
+    tenant_id TEXT NOT NULL,
+    cve TEXT NOT NULL,
+    date_added TEXT,
+    ransomware INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, cve)
+  );
+  CREATE TABLE epss (
+    tenant_id TEXT NOT NULL,
+    cve TEXT NOT NULL,
+    score REAL NOT NULL,
+    percentile REAL NOT NULL,
+    PRIMARY KEY (tenant_id, cve)
+  );
+  CREATE TABLE feeds (
+    tenant_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, name)
+  );
   `
 ];
 
