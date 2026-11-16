@@ -18,6 +18,9 @@ function rejectInlineSecrets(value, path = "") {
   }
 }
 
+export const KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
+export const EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz";
+
 const isStr = (v) => typeof v === "string" && v.length > 0;
 function need(cond, msg) { if (!cond) throw new Error(`config: ${msg}`); }
 
@@ -50,6 +53,11 @@ export function parseConfig(raw) {
   }
   if (c.wazuh) need(isStr(c.wazuh.baseUrl) && isStr(c.wazuh.user), "wazuh needs baseUrl and user");
   if (c.wazuh?.requestsPerMinute != null) need(Number.isFinite(c.wazuh.requestsPerMinute) && c.wazuh.requestsPerMinute > 0, "wazuh.requestsPerMinute must be a positive number");
+  if (c.wazuh?.indexer != null) {
+    const ix = c.wazuh.indexer;
+    need(isStr(ix.baseUrl) && isStr(ix.user), "wazuh.indexer needs baseUrl and user");
+    if (ix.requestsPerMinute != null) need(Number.isFinite(ix.requestsPerMinute) && ix.requestsPerMinute > 0, "wazuh.indexer.requestsPerMinute must be a positive number");
+  }
   need(Array.isArray(c.docker), "docker must be a list");
   c.docker.forEach((d, i) => need(isStr(d?.name) && isStr(d?.baseUrl) && isStr(d?.assetKey), `docker[${i}] needs name, baseUrl and assetKey`));
   need(Array.isArray(c.network), "network must be a list");
@@ -78,5 +86,6 @@ export function egressHosts(config) {
   const httpsHosts = ["endoflife.date"];
   if (config.proxmox) httpsHosts.push(host(config.proxmox.baseUrl));
   if (config.wazuh) httpsHosts.push(host(config.wazuh.baseUrl));
+  if (config.wazuh?.indexer) httpsHosts.push(host(config.wazuh.indexer.baseUrl), host(KEV_URL), host(EPSS_URL));
   return { allowHosts: httpsHosts, allowHttpHosts: config.docker.map((d) => host(d.baseUrl)) };
 }

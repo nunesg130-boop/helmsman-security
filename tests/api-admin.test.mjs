@@ -78,6 +78,11 @@ test("admin listener", async (t) => {
     assert.equal(credentials.get("wazuh.password"), "pw-xyz");
     assert.equal((await req(srv.port, "/admin/credentials/wazuh.password")).status, 404);
   });
+  await t.test("the indexer password can be set and is write-only", async () => {
+    assert.equal((await req(srv.port, "/admin/credentials/wazuh.indexerPassword", { method: "PUT", body: { value: "ix-secret" } })).status, 204);
+    assert.ok(!(await req(srv.port, "/admin/credentials")).text.includes("ix-secret"));
+    assert.equal(credentials.get("wazuh.indexerPassword"), "ix-secret");
+  });
   await t.test("the API token can't be set directly", async () => {
     assert.equal((await req(srv.port, "/admin/credentials/api.readToken", { method: "PUT", body: { value: "mine" } })).status, 400);
   });

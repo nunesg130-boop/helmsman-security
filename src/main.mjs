@@ -78,7 +78,7 @@ export async function start({
   const hosts = egressHosts(config);
   if (eolBase !== EOL_BASE) hosts.allowHosts.push(new URL(eolBase).hostname);
   const http = createHttp(hosts);
-  const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
+  const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
 
   const sources = {};
   if (config.proxmox) sources.proxmox = () => collectProxmox({ http, cfg: config.proxmox, secret: requireCredential(credentials, "proxmox.tokenSecret"), now });

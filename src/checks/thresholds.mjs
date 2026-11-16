@@ -6,7 +6,10 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
   backupMaxAgeDays: 2,
   clockDriftSeconds: 5,
   storageFillPct: 85,
-  ssdLifeRemainingPct: 10
+  ssdLifeRemainingPct: 10,
+  vulnsRefreshMinutes: 60,
+  threatFeedRefreshHours: 24,
+  threatFeedMaxAgeDays: 7
 });
 
 export function threshold(config, key) {
