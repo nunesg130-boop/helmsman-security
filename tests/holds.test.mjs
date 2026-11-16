@@ -47,3 +47,25 @@ test("tenant isolation", () => {
   assert.equal(new HoldStore(db, "b").activeExclusion("x", "c", NOW), null);
   assert.equal(new HoldStore(db, "b").list(NOW).length, 0);
 });
+
+test("a whole-machine exclusion (check '*') applies to every check on that asset only", () => {
+  const h = new HoldStore(fresh(), "t");
+  h.add({ kind: "exclusion", assetKey: "pve:guest:300", checkId: "*", reason: "test VM" }, NOW);
+  assert.equal(h.activeExclusion("pve:guest:300", "agent_present", NOW).reason, "test VM");
+  assert.equal(h.activeExclusion("pve:guest:300", "os_eol", NOW).reason, "test VM");
+  assert.equal(h.activeExclusion("pve:guest:301", "agent_present", NOW), null);
+});
+
+test("a per-check exclusion's reason wins over a whole-machine one", () => {
+  const h = new HoldStore(fresh(), "t");
+  h.add({ kind: "exclusion", assetKey: "a", checkId: "*", reason: "appliance" }, NOW);
+  h.add({ kind: "exclusion", assetKey: "a", checkId: "backup_jobs", reason: "backed up by HA itself" }, NOW);
+  assert.equal(h.activeExclusion("a", "backup_jobs", NOW).reason, "backed up by HA itself");
+  assert.equal(h.activeExclusion("a", "os_eol", NOW).reason, "appliance");
+});
+
+test("an expired whole-machine exclusion stops applying", () => {
+  const h = new HoldStore(fresh(), "t");
+  h.add({ kind: "exclusion", assetKey: "a", checkId: "*", reason: "r", expiresAt: NOW - 1 }, NOW - 100);
+  assert.equal(h.activeExclusion("a", "os_eol", NOW), null);
+});
