@@ -1,0 +1,617 @@
+{
+  "version": 1,
+  "generatedAt": 1794859200,
+  "servers": [
+    {
+      "server": "srv0",
+      "listen": [
+        ":443"
+      ],
+      "routes": [
+        {
+          "match": [
+            {
+              "host": [
+                "jellyprox.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.7:8096"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "paperless.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "subroute",
+                      "routes": [
+                        {
+                          "match": [
+                            {
+                              "path": [
+                                "/outpost.goauthentik.io/*"
+                              ]
+                            }
+                          ],
+                          "handle": [
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.213:9000"
+                              ]
+                            }
+                          ],
+                          "terminal": null
+                        },
+                        {
+                          "match": [
+                            {
+                              "path": [
+                                "/api/*"
+                              ]
+                            }
+                          ],
+                          "handle": [
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.109:8000"
+                              ]
+                            }
+                          ],
+                          "terminal": null
+                        },
+                        {
+                          "match": [],
+                          "handle": [
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.213:9000"
+                              ],
+                              "rewrite": "/outpost.goauthentik.io/auth/caddy",
+                              "handle_response": true
+                            },
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.109:8000"
+                              ]
+                            }
+                          ],
+                          "terminal": null
+                        }
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "palmettotechit.com",
+                "www.palmettotechit.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [
+                    {
+                      "host": [
+                        "www.palmettotechit.com"
+                      ]
+                    }
+                  ],
+                  "handle": [
+                    {
+                      "handler": "static_response"
+                    }
+                  ],
+                  "terminal": null
+                },
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "encode"
+                    },
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.213:8088"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "seerprox.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.104:5055"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "donetick.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.109:2021"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "security.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "subroute",
+                      "routes": [
+                        {
+                          "match": [],
+                          "handle": [
+                            {
+                              "handler": "headers"
+                            },
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.213:9000"
+                              ],
+                              "rewrite": "/outpost.goauthentik.io/auth/caddy",
+                              "handle_response": true
+                            },
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.116:8081"
+                              ]
+                            }
+                          ],
+                          "terminal": null
+                        }
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "wizarr.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.122:5690"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "vault.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.109:80"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "sure.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.213:9000"
+                      ],
+                      "rewrite": "/outpost.goauthentik.io/auth/caddy",
+                      "handle_response": true
+                    }
+                  ],
+                  "terminal": null
+                },
+                {
+                  "match": [
+                    {
+                      "path": [
+                        "/outpost.goauthentik.io/*"
+                      ]
+                    }
+                  ],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.213:9000"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                },
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.107:3000"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "navi.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.7:4533"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "trek.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.232:3000"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "auth.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.213:9000"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "home.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "subroute",
+                      "routes": [
+                        {
+                          "match": [
+                            {
+                              "path": [
+                                "/outpost.goauthentik.io/*"
+                              ]
+                            }
+                          ],
+                          "handle": [
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.213:9000"
+                              ]
+                            }
+                          ],
+                          "terminal": null
+                        },
+                        {
+                          "match": [],
+                          "handle": [
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.213:9000"
+                              ],
+                              "rewrite": "/outpost.goauthentik.io/auth/caddy",
+                              "handle_response": true
+                            },
+                            {
+                              "handler": "reverse_proxy",
+                              "upstreams": [
+                                "192.168.0.180:3000"
+                              ]
+                            }
+                          ],
+                          "terminal": null
+                        }
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        },
+        {
+          "match": [
+            {
+              "host": [
+                "wyl.jellofin.com"
+              ]
+            }
+          ],
+          "handle": [
+            {
+              "handler": "subroute",
+              "routes": [
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.213:9000"
+                      ],
+                      "rewrite": "/outpost.goauthentik.io/auth/caddy",
+                      "handle_response": true
+                    }
+                  ],
+                  "terminal": null
+                },
+                {
+                  "match": [
+                    {
+                      "path": [
+                        "/outpost.goauthentik.io/*"
+                      ]
+                    }
+                  ],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.213:9000"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                },
+                {
+                  "match": [],
+                  "handle": [
+                    {
+                      "handler": "reverse_proxy",
+                      "upstreams": [
+                        "192.168.0.125:8840"
+                      ]
+                    }
+                  ],
+                  "terminal": null
+                }
+              ]
+            }
+          ],
+          "terminal": true
+        }
+      ]
+    }
+  ]
+}
