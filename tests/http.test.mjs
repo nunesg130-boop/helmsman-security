@@ -114,3 +114,18 @@ test("a GET may carry a JSON body (search queries); other methods stay refused",
     await assert.rejects(http.fetchJson(`${srv.url}/s`, { method: "POST", body: {} }), (e) => e.code === "egress_denied");
   } finally { await srv.close(); }
 });
+
+test("a same-host redirect is followed; a redirect elsewhere or a redirect loop is refused", async () => {
+  const srv = await startFixtureServer({
+    "/latest.gz": () => [302, "", { location: "dated.gz" }],
+    "/dated.gz": () => [200, Buffer.from("abc")],
+    "/away": () => [302, "", { location: "https://example.org/x" }],
+    "/loop": () => [302, "", { location: "/loop" }]
+  });
+  try {
+    const http = createHttp({ allowHosts: ["127.0.0.1", "example.org"] });
+    assert.equal((await http.fetchBuffer(`${srv.url}/latest.gz`, { certSha256: srv.certSha256 })).toString(), "abc");
+    await assert.rejects(http.fetchBuffer(`${srv.url}/away`, { certSha256: srv.certSha256 }), (e) => e.code === "http" && /redirect/u.test(e.message));
+    await assert.rejects(http.fetchBuffer(`${srv.url}/loop`, { certSha256: srv.certSha256 }), (e) => e.code === "http" && /redirect/u.test(e.message));
+  } finally { await srv.close(); }
+});

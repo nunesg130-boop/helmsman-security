@@ -20,9 +20,10 @@ test("pages with search_after until empty and returns every record", async () =>
     assert.equal(out.records.length, 2500);
     assert.equal(out.total, 2500);
     assert.equal(new Set(out.records.map((r) => r.cve)).size, 2500);
-    assert.equal(srv.requests.length, 4);
-    assert.equal(JSON.parse(srv.requests[0].body).search_after, undefined);
-    assert.ok(Array.isArray(JSON.parse(srv.requests[1].body).search_after));
+    const pages = srv.requests.map((r) => JSON.parse(r.body)).filter((q) => q.size > 0);
+    assert.equal(pages.length, 4);
+    assert.equal(pages[0].search_after, undefined);
+    assert.ok(Array.isArray(pages[1].search_after));
   });
 });
 
@@ -35,7 +36,7 @@ test("sends Basic auth with GET and requests only the needed fields, sorted for 
     assert.equal(r.headers.authorization, `Basic ${Buffer.from("helmsec-vuln-ro:ix-secret").toString("base64")}`);
     const q = JSON.parse(r.body);
     assert.equal(q.track_total_hits, true);
-    assert.deepEqual(q.sort, ["agent.id", "vulnerability.id", "package.name", "package.version", "package.architecture", "package.type"]);
+    assert.deepEqual(q.sort.map((x) => Object.keys(x)[0]), ["agent.id", "vulnerability.id", "package.name", "package.version", "package.architecture", "package.type"]);
     assert.ok(q._source.includes("vulnerability.scanner.condition") && !q._source.includes("vulnerability.description"));
   });
 });
@@ -59,10 +60,58 @@ test("odd values degrade to unknown rather than failing or guessing", async () =
   });
 });
 
-test("a short result (count differs from total) fails the run", async () => {
-  await withIndexer(indexerRoutes(many(9), { total: 10 }), async (ix) => {
+test("a short result (count differs from total) is retried once, then fails the run", async () => {
+  await withIndexer(indexerRoutes(many(9), { total: 10 }), async (ix, srv) => {
     await assert.rejects(() => ix.vulnerabilities(), (e) => e.code === "parse" && /9 of 10/u.test(e.message));
+    assert.equal(srv.requests.filter((r) => JSON.parse(r.body).search_after === undefined && JSON.parse(r.body).size > 0).length, 2);
   });
+});
+
+test("an empty answer is a failed read, never 'no vulnerabilities'", async () => {
+  await withIndexer(indexerRoutes([]), async (ix) => {
+    await assert.rejects(() => ix.vulnerabilities(), (e) => e.code === "parse" && /no vulnerability records/u.test(e.message));
+  });
+});
+
+for (const [label, envelope] of [["a timed-out search", { timed_out: true }], ["a failed shard", { _shards: { total: 2, successful: 1, failed: 1 } }], ["missing shard information", { _shards: undefined }]]) {
+  test(`${label} fails the run instead of being read as complete`, async () => {
+    await withIndexer(indexerRoutes(many(5), { envelope }), async (ix) => {
+      await assert.rejects(() => ix.vulnerabilities(), (e) => e.code === "parse" && /partial/u.test(e.message));
+    });
+  });
+}
+
+test("a lower-bound total (relation gte) fails the run", async () => {
+  const hits = [{ _source: vulnDoc(), sort: ["010", "CVE-2026-68479", "linux-image-amd64", "6.12.74-2", "amd64", "deb"] }];
+  await withIndexer({ [`GET ${SEARCH_PATH}`]: () => [200, { timed_out: false, _shards: { failed: 0 }, hits: { total: { value: 10000, relation: "gte" }, hits } }] }, async (ix) => {
+    await assert.rejects(() => ix.vulnerabilities(), (e) => e.code === "parse");
+  });
+});
+
+test("identical records straddling a page boundary are counted, not lost or fatal", async () => {
+  const twin = () => vulnDoc({ agent: "001", cve: "CVE-2026-00002" });
+  const docs = [vulnDoc({ agent: "001", cve: "CVE-2026-00001" }), twin(), twin(), twin(), vulnDoc({ agent: "001", cve: "CVE-2026-00003" })];
+  await withIndexer(indexerRoutes(docs), async (ix) => {
+    const out = await ix.vulnerabilities();
+    assert.deepEqual(out.records.map((r) => r.cve), ["CVE-2026-00001", "CVE-2026-00002", "CVE-2026-00003"]);
+    assert.deepEqual([out.total, out.duplicates], [5, 2]);
+    assert.deepEqual([...out.agents], [["001", 3]]);
+  }, { pageSize: 2 });
+});
+
+test("identical records on the same page collapse into one finding and are counted", async () => {
+  const docs = [vulnDoc({ cve: "CVE-1" }), vulnDoc({ cve: "CVE-1" }), vulnDoc({ cve: "CVE-2" })];
+  await withIndexer(indexerRoutes(docs), async (ix) => {
+    const out = await ix.vulnerabilities();
+    assert.deepEqual([out.records.length, out.duplicates, out.total], [2, 1, 3]);
+  });
+});
+
+test("records missing an optional sort field still page correctly", async () => {
+  const docs = many(5).map((d) => { delete d.package.architecture; return d; });
+  await withIndexer(indexerRoutes(docs), async (ix) => {
+    assert.equal((await ix.vulnerabilities()).records.length, 5);
+  }, { pageSize: 2 });
 });
 
 test("a hit without a CVE id fails the run rather than being skipped", async () => {
@@ -103,7 +152,7 @@ test("HTTP 429 waits and retries", async () => {
 
 test("a server that keeps returning the same page is stopped, not followed forever", async () => {
   const hits = [{ _source: vulnDoc(), sort: ["010", "CVE-2026-68479", "linux-image-amd64", "6.12.74-2", "amd64", "deb"] }];
-  await withIndexer({ [`GET ${SEARCH_PATH}`]: () => [200, { hits: { total: { value: 1, relation: "eq" }, hits } }] }, async (ix) => {
+  await withIndexer({ [`GET ${SEARCH_PATH}`]: () => [200, { timed_out: false, _shards: { failed: 0 }, hits: { total: { value: 1, relation: "eq" }, hits } }] }, async (ix) => {
     await assert.rejects(() => ix.vulnerabilities(), (e) => e.code === "parse");
   });
 });

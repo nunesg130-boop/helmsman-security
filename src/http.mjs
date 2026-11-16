@@ -50,7 +50,10 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
   const plainHosts = new Set(allowHttpHosts.map((h) => h.toLowerCase()));
 
   // Raw bytes, with the same egress, pinning, status and size rules.
-  function fetchBuffer(url, { method = "GET", headers = {}, body, timeoutMs = 10_000, deadlineMs = timeoutMs * 3, maxBytes = 50_000_000, certSha256 } = {}) {
+  // A GET may be redirected within the same host (e.g. "latest" -> a dated
+  // file), at most three times. Redirects to another host are refused.
+  function fetchBuffer(url, options = {}) {
+    const { method = "GET", headers = {}, body, timeoutMs = 10_000, deadlineMs = timeoutMs * 3, maxBytes = 50_000_000, certSha256, redirects = 0 } = options;
     return new Promise((resolve, reject) => {
       let u;
       try { u = new URL(url); } catch { return reject(new CollectorError("egress_denied", "invalid URL")); }
@@ -76,6 +79,18 @@ export function createHttp({ allowHosts = [], allowHttpHosts = [] } = {}) {
       const req = lib.request(u, opts, (res) => {
         const status = res.statusCode ?? 0;
         if (status === 401 || status === 403) { res.resume(); return fail(new CollectorError("auth", `HTTP ${status}`)); }
+        if ([301, 302, 303, 307, 308].includes(status)) {
+          res.resume();
+          let next = null;
+          try { next = new URL(res.headers.location ?? "", u); } catch { /* handled below */ }
+          if (!next || method !== "GET" || payload || next.host !== u.host || next.protocol !== u.protocol) {
+            return fail(Object.assign(new CollectorError("http", `HTTP ${status} redirect not followed`), { status }));
+          }
+          if (redirects >= 3) return fail(Object.assign(new CollectorError("http", "too many redirects"), { status }));
+          settled = true;
+          clearTimeout(deadline);
+          return resolve(fetchBuffer(next.href, { ...options, redirects: redirects + 1 }));
+        }
         if (status < 200 || status >= 300) { res.resume(); return fail(Object.assign(new CollectorError("http", `HTTP ${status}`), { status })); }
         const chunks = [];
         let size = 0;
