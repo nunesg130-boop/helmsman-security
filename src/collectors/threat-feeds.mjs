@@ -49,5 +49,5 @@ export async function refreshThreatFeeds({ http, findings, now = Date.now, kevUr
   await feed("KEV", "kev", minKev, async () => parseKev(await http.fetchJson(kevUrl, { ...pin, timeoutMs: 30_000, maxBytes: 20_000_000 })), (r, t) => findings.replaceKev(r, t));
   await feed("EPSS", "epss", minEpss, async () => parseEpssCsvGz(await http.fetchBuffer(epssUrl, { ...pin, timeoutMs: 60_000, maxBytes: 30_000_000 })), (r, t) => findings.replaceEpss(r, t));
   if (value.kev.error && value.epss.error) throw new Error(warnings.join("; "));
-  return { evidence: [{ assetKey: "_global", kind: "threat.feeds", value }], warnings };
+  return { evidence: [{ assetKey: "_global", kind: "threat.feeds", source: "threat-feeds", value }], warnings };
 }

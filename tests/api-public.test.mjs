@@ -94,3 +94,95 @@ test("public API behaviour", async (t) => {
 
   await t.test("unknown asset 404", async () => assert.equal((await req(srv.port, "/api/v1/assets/nope")).status, 404));
 });
+
+// --- vulnerabilities ---
+async function vulnSetup({ feedsAt = Date.now(), runAt = Date.now(), failLast = false } = {}) {
+  const { FindingStore } = await import("../src/vuln/findings.mjs");
+  const db = openDb(":memory:");
+  const store = new EvidenceStore(db, "default");
+  const credentials = new CredentialStore(db, "default", createSecretBox(randomBytes(32)));
+  credentials.set("api.readToken", TOKEN, 1);
+  credentials.set("wazuh.indexerPassword", "ix-secret-value", 1);
+  db.prepare("INSERT INTO assets (tenant_id, asset_key, class, name, sources_json, last_seen_at) VALUES ('default','pve:guest:100','guest','Jelly-Arr','{}',?)").run(Date.now());
+  const f = new FindingStore(db, "default");
+  const mk = (cve, over = {}) => ({ assetKey: "pve:guest:100", cve, pkg: { name: "openssl", version: "3.0-1", arch: "amd64", type: "deb" }, severity: "high", cvss: 7.5, fixState: "fix-available-not-applied", fixedVersion: "3.0-2", lowConfidence: false, condition: "Package less than 3.0-2", recognisedCondition: true, detectedAt: 1, ...over });
+  f.replaceSource("wazuh", [mk("CVE-1", { severity: "critical", cvss: 9.8 }), mk("CVE-2"), mk("CVE-3", { assetKey: "wazuh:agent:099", fixState: "no-fix-exists", fixedVersion: null })], runAt);
+  f.replaceKev([{ cve: "CVE-2", dateAdded: "2026-01-01", ransomware: false }], feedsAt);
+  f.replaceEpss([{ cve: "CVE-1", score: 0.9, percentile: 0.99 }], feedsAt);
+  const r = store.beginRun("wazuh-vulns", runAt);
+  store.finishRun(r, "ok", {}, runAt);
+  if (failLast) { const r2 = store.beginRun("wazuh-vulns", Date.now()); store.finishRun(r2, "failed", { error: "auth: HTTP 401" }, Date.now()); }
+  return createPublicServer({ db, tenantId: "default", store, credentials, tls, host: "127.0.0.1", port: 0, version: "0.1.0" });
+}
+
+test("GET /api/v1/vulnerabilities lists findings with names, KEV first, and filters", async () => {
+  const srv = await vulnSetup();
+  try {
+    const all = await req(srv.port, "/api/v1/vulnerabilities");
+    assert.equal(all.status, 200);
+    assert.deepEqual(all.body.items.map((i) => i.cve), ["CVE-2", "CVE-1", "CVE-3"]);
+    assert.deepEqual([all.body.items[0].assetName, all.body.items[2].assetName], ["Jelly-Arr", "wazuh:agent:099"]);
+    assert.deepEqual([all.body.total, all.body.limit, all.body.offset, all.body.findingsStale, all.body.threatDataStale], [3, 50, 0, false, false]);
+    assert.deepEqual((await req(srv.port, "/api/v1/vulnerabilities?kev=true")).body.items.map((i) => i.cve), ["CVE-2"]);
+    assert.deepEqual((await req(srv.port, "/api/v1/vulnerabilities?fix=no-fix-exists")).body.items.map((i) => i.cve), ["CVE-3"]);
+    assert.deepEqual((await req(srv.port, "/api/v1/vulnerabilities?severity=critical")).body.items.map((i) => i.cve), ["CVE-1"]);
+    assert.deepEqual((await req(srv.port, "/api/v1/vulnerabilities?asset=pve%3Aguest%3A100&limit=1&offset=1")).body.items.map((i) => i.cve), ["CVE-1"]);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities?limit=5000")).body.limit, 200);
+  } finally { await srv.close(); }
+});
+
+test("vulnerability endpoints reject bad filters, missing tokens and non-GET", async () => {
+  const srv = await vulnSetup();
+  try {
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities?fix=maybe")).status, 400);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities?severity=scary")).status, 400);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities?kev=yes")).status, 400);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities", { token: null })).status, 401);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities/summary", { token: "wrong" })).status, 401);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities", { method: "POST" })).status, 405);
+  } finally { await srv.close(); }
+});
+
+test("summary lists per-asset counts with names and totals", async () => {
+  const srv = await vulnSetup();
+  try {
+    const { body } = await req(srv.port, "/api/v1/vulnerabilities/summary");
+    const jelly = body.assets.find((a) => a.assetKey === "pve:guest:100");
+    assert.deepEqual([jelly.assetName, jelly.total, jelly.critical, jelly.high, jelly.fixAvailable, jelly.kev], ["Jelly-Arr", 2, 1, 1, 2, 1]);
+    assert.deepEqual([body.totals.total, body.totals.noFix, body.totals.kev], [3, 1, 1]);
+    assert.equal(body.collection.status, "ok");
+  } finally { await srv.close(); }
+});
+
+test("old feeds and old or failed collection are reported as stale, never as current", async () => {
+  const old = Date.now() - 30 * 86400_000;
+  const srv = await vulnSetup({ feedsAt: old, runAt: old });
+  try {
+    const { body } = await req(srv.port, "/api/v1/vulnerabilities");
+    assert.deepEqual([body.findingsStale, body.threatDataStale, body.items[0].kev, body.items[0].epss], [true, true, null, null]);
+    assert.equal((await req(srv.port, "/api/v1/vulnerabilities/summary")).body.totals.kev, null);
+  } finally { await srv.close(); }
+  const failing = await vulnSetup({ failLast: true });
+  try {
+    const { body } = await req(failing.port, "/api/v1/vulnerabilities");
+    assert.equal(body.findingsStale, true);
+    assert.equal(body.collection.lastError, "auth: HTTP 401");
+  } finally { await failing.close(); }
+});
+
+test("no vulnerability collection yet reads as stale with nothing listed", async () => {
+  const srv = await setup();
+  try {
+    const { body } = await req(srv.port, "/api/v1/vulnerabilities");
+    assert.deepEqual([body.total, body.findingsStale, body.collection.status], [0, true, "never_run"]);
+  } finally { await srv.close(); }
+});
+
+test("the indexer password never appears in a vulnerability response", async () => {
+  const srv = await vulnSetup();
+  try {
+    for (const path of ["/api/v1/vulnerabilities", "/api/v1/vulnerabilities/summary", "/api/v1/summary"]) {
+      assert.ok(!JSON.stringify((await req(srv.port, path)).body).includes("ix-secret-value"), path);
+    }
+  } finally { await srv.close(); }
+});

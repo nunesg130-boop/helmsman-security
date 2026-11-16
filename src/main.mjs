@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomBytes, X509Certificate } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { loadConfig, egressHosts } from "./config.mjs";
+import { loadConfig, egressHosts, KEV_URL, EPSS_URL } from "./config.mjs";
 import { loadMasterKey, createSecretBox, CredentialStore } from "./secrets.mjs";
 import { openDb } from "./db.mjs";
 import { EvidenceStore } from "./evidence.mjs";
@@ -16,6 +16,11 @@ import { createWazuh414 } from "./collectors/wazuh414.mjs";
 import { collectDocker } from "./collectors/docker.mjs";
 import { collectEolDataset, EOL_BASE } from "./collectors/eol-dataset.mjs";
 import { collectionCycle, eolCycle } from "./cycle.mjs";
+import { runCollector } from "./collect.mjs";
+import { createWazuhIndexer414 } from "./collectors/wazuh-indexer414.mjs";
+import { refreshThreatFeeds } from "./collectors/threat-feeds.mjs";
+import { FindingStore } from "./vuln/findings.mjs";
+import { vulnCycle } from "./vuln/cycle.mjs";
 import { threshold } from "./checks/thresholds.mjs";
 import { startScheduler } from "./scheduler.mjs";
 import { createPublicServer } from "./api/public.mjs";
@@ -55,7 +60,11 @@ export async function start({
   now = Date.now,
   schedule = true,
   eolBase = EOL_BASE,
-  eolCertSha256 = null // tests only: pin a local endoflife.date stand-in
+  eolCertSha256 = null, // tests only: pin a local endoflife.date stand-in
+  kevUrl = KEV_URL,
+  epssUrl = EPSS_URL,
+  feedCertSha256 = null, // tests only: pin local stand-ins for the threat feeds
+  feedMinimums = {} // tests only: { minKev, minEpss }
 } = {}) {
   const config = loadConfig(configPath);
   const box = createSecretBox(loadMasterKey(keyPath));
@@ -77,6 +86,7 @@ export async function start({
 
   const hosts = egressHosts(config);
   if (eolBase !== EOL_BASE) hosts.allowHosts.push(new URL(eolBase).hostname);
+  for (const [url, real] of [[kevUrl, KEV_URL], [epssUrl, EPSS_URL]]) if (url !== real) hosts.allowHosts.push(new URL(url).hostname);
   const http = createHttp(hosts);
   const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
 
@@ -90,21 +100,49 @@ export async function start({
   }
   if (config.docker.length) sources.docker = () => collectDocker({ http, hosts: config.docker, now });
 
-  const collect = () => collectionCycle({ db, tenantId, store, holds, ledger, config, sources, now, secrets: secretValues() });
+  // The first vulnerability read waits for the first collection, so findings
+  // are filed under machines the engine already knows.
+  let firstCollectDone;
+  const firstCollect = new Promise((resolve) => { firstCollectDone = resolve; });
+  const collect = () => collectionCycle({ db, tenantId, store, holds, ledger, config, sources, now, secrets: secretValues() }).finally(firstCollectDone);
+
+  const findings = new FindingStore(db, tenantId);
+  const indexerCfg = config.wazuh?.indexer ?? null;
+  const collectVulns = async () => {
+    if (!indexerCfg) return { status: "not_configured" };
+    let indexer;
+    try {
+      indexer = createWazuhIndexer414({ http, baseUrl: indexerCfg.baseUrl, user: indexerCfg.user, password: requireCredential(credentials, "wazuh.indexerPassword"), certSha256: indexerCfg.certSha256, requestsPerMinute: indexerCfg.requestsPerMinute ?? 60 });
+    } catch (error) {
+      indexer = { vulnerabilities: async () => { throw error; } };
+    }
+    return vulnCycle({ db, tenantId, store, findings, indexer, config, now, secrets: secretValues() });
+  };
+  const feedMaxAgeMs = threshold(config, "threatFeedMaxAgeDays") * 86400_000;
+  const refreshFeeds = async () => {
+    if (!indexerCfg) return { status: "not_configured" };
+    return runCollector(store, "threat-feeds", () => refreshThreatFeeds({ http, findings, now, kevUrl, epssUrl, ...(feedCertSha256 ? { certSha256: feedCertSha256 } : {}), ...feedMinimums }),
+      { now, staleAfterMs: feedMaxAgeMs, secrets: secretValues(), deadlineMs: 5 * 60_000 });
+  };
   const refreshEol = () => eolCycle({
     store, config, now,
     fetchEol: () => collectEolDataset({ fetchJson: (u) => http.fetchJson(u, eolCertSha256 ? { certSha256: eolCertSha256 } : {}), products: config.eol.products, now, maxAgeMs: threshold(config, "eolMaxAgeDays") * 86400_000, base: eolBase })
   });
 
   const cycleStaleMs = threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
-  const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION, staleAfterMs: cycleStaleMs, now });
+  const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION, staleAfterMs: cycleStaleMs,
+    vulnStaleAfterMs: threshold(config, "vulnsRefreshMinutes") * threshold(config, "staleFactor") * 60_000, maxFeedAgeMs: feedMaxAgeMs, now });
   const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now });
   log(`API listening on ${config.listen.apiHost}:${api.port}; admin on ${config.listen.adminHost}:${admin.port} (only from ${config.listen.adminAllowIp}).`);
 
   const scheduler = schedule ? startScheduler({
     tasks: [
       { name: "eol", everyMs: threshold(config, "eolRefreshHours") * 3600_000, run: refreshEol },
-      { name: "collect", everyMs: threshold(config, "collectMinutes") * 60_000, run: collect }
+      { name: "collect", everyMs: threshold(config, "collectMinutes") * 60_000, run: collect },
+      ...(indexerCfg ? [
+        { name: "threat-feeds", everyMs: threshold(config, "threatFeedRefreshHours") * 3600_000, run: refreshFeeds },
+        { name: "vulns", everyMs: threshold(config, "vulnsRefreshMinutes") * 60_000, run: async () => { await firstCollect; return collectVulns(); } }
+      ] : [])
     ],
     onError: (name, e) => log(`${name} cycle error: ${e.message}`)
   }) : null;
@@ -119,7 +157,7 @@ export async function start({
     db.close();
   }
 
-  return { config, db, store, ledger, credentials, apiPort: api.port, adminPort: admin.port, collect, refreshEol, stop };
+  return { config, db, store, ledger, credentials, apiPort: api.port, adminPort: admin.port, collect, refreshEol, collectVulns, refreshFeeds, findings, scheduledTasks: schedule ? ['eol', 'collect', ...(indexerCfg ? ['threat-feeds', 'vulns'] : [])] : [], stop };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
