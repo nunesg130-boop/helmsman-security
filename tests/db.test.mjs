@@ -40,3 +40,21 @@ test("result state column rejects unknown states", () => {
   ).run());
   db.close();
 });
+
+test("a version 1 database is migrated to the current schema with its data kept", async () => {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { DatabaseSync } = await import("node:sqlite");
+  const file = join(mkdtempSync(join(tmpdir(), "hs-mig-")), "engine.db");
+  openDb(file).close();
+  const raw = new DatabaseSync(file);
+  raw.exec("DROP TABLE findings; DROP TABLE kev; DROP TABLE epss; DROP TABLE feeds; PRAGMA user_version = 1;");
+  raw.prepare("INSERT INTO credentials (tenant_id, name, sealed, updated_at) VALUES ('t', 'wazuh.password', 'x', 1)").run();
+  raw.close();
+  const db = openDb(file);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, SCHEMA_VERSION);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM credentials").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM findings").get().n, 0);
+  db.close();
+});
