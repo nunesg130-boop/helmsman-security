@@ -58,3 +58,10 @@ test("windows check is honest about phase 3 on windows", () => {
   const r = run(windowsFailedUpdates, { platform: "windows", name: "Microsoft Windows 11 Pro", major: "10", minor: "0" }, []);
   assert.deepEqual([r.state, r.reason], ["unknown", "failed-update events are collected from phase 3"]);
 });
+
+test("Debian 13 kernel names with +deb13 are recognised", () => {
+  const items = [pkg("linux-image-6.12.48+deb13-amd64"), pkg("linux-image-6.12.57+deb13-amd64"), pkg("linux-image-amd64")];
+  assert.equal(newestKernel(items, "debian"), "6.12.57+deb13-amd64");
+  const r = run(pendingReboot, pve("6.12.48+deb13-amd64"), items);
+  assert.deepEqual([r.state, r.reason], ["issue", "running 6.12.48+deb13-amd64, newest installed 6.12.57+deb13-amd64"]);
+});
