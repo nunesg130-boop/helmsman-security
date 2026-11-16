@@ -22,7 +22,7 @@
 <form id="hold-form">
   <select name="kind"><option value="exclusion">exclusion</option><option value="hold">hold</option></select>
   <input name="assetKey" placeholder="asset key, e.g. pve:guest:152" required>
-  <input name="checkId" placeholder="check id (exclusion)">
+  <input name="checkId" placeholder="check id, or * for the whole machine (exclusion)">
   <input name="product" placeholder="product (hold)">
   <input name="version" placeholder="version (hold)">
   <input name="reason" placeholder="reason (required)" required>
@@ -61,7 +61,7 @@ async function load() {
   const hb = $("#holds tbody"); hb.replaceChildren();
   for (const h of holds) {
     const tr = document.createElement("tr");
-    cell(tr, h.kind + (h.expired ? " (expired)" : "")); cell(tr, h.assetKey); cell(tr, h.checkId ?? `${h.product} ${h.version}`); cell(tr, h.reason);
+    cell(tr, h.kind + (h.expired ? " (expired)" : "")); cell(tr, h.assetKey); cell(tr, h.checkId === "*" ? "whole machine" : (h.checkId ?? `${h.product} ${h.version}`)); cell(tr, h.reason);
     cell(tr, h.expiresAt ? new Date(h.expiresAt).toLocaleString() : "never");
     cell(tr, "").append(button("Remove", async () => { await api(`/admin/holds/${h.id}`, "DELETE"); load(); }));
     hb.append(tr);

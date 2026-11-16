@@ -1,5 +1,6 @@
 // Holds (deliberately pinned software versions) and check exclusions
-// ("this guest is intentionally not backed up"). Both need a reason, both
+// ("this guest is intentionally not backed up"; check "*" = every check on
+// that machine). Both need a reason, both
 // are always shown, and an expired entry stops having any effect.
 export class HoldStore {
   constructor(db, tenantId) {
@@ -32,13 +33,14 @@ export class HoldStore {
     }));
   }
 
-  #active(sql, params, now) {
-    const r = this.db.prepare(`SELECT * FROM holds WHERE tenant_id = ? AND ${sql} AND (expires_at IS NULL OR expires_at > ?) ORDER BY id LIMIT 1`).get(this.tenantId, ...params, now);
+  #active(sql, params, now, order = "id") {
+    const r = this.db.prepare(`SELECT * FROM holds WHERE tenant_id = ? AND ${sql} AND (expires_at IS NULL OR expires_at > ?) ORDER BY ${order} LIMIT 1`).get(this.tenantId, ...params, now);
     return r ? { id: r.id, kind: r.kind, reason: r.reason, expiresAt: r.expires_at } : null;
   }
 
+  // checkId "*" excludes the whole machine; a per-check exclusion's reason wins.
   activeExclusion(assetKey, checkId, now) {
-    return this.#active("kind = 'exclusion' AND asset_key = ? AND check_id = ?", [assetKey, checkId], now);
+    return this.#active("kind = 'exclusion' AND asset_key = ? AND (check_id = ? OR check_id = '*')", [assetKey, checkId], now, "check_id = '*', id");
   }
 
   activeHold(assetKey, product, version, now) {
