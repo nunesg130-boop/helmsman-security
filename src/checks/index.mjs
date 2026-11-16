@@ -6,6 +6,7 @@ import { backupJobs, backupStorage } from "./backup.mjs";
 import { clockDrift } from "./clock.mjs";
 import { pendingReboot } from "./reboot.mjs";
 import { windowsFailedUpdates } from "./windows.mjs";
+import { vulnCoverageHost } from "./vuln.mjs";
 
 // Devices with no collector yet (router, switches) still appear, as unknown.
 export const collectorCoverage = {
@@ -27,5 +28,6 @@ export const CHECKS = Object.freeze([
   clockDrift,
   pendingReboot,
   windowsFailedUpdates,
+  vulnCoverageHost,
   collectorCoverage
 ]);
