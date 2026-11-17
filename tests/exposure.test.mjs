@@ -203,3 +203,24 @@ test("a tunnel that overrides the Host header selects the Caddy route by that he
   const s = run({ shape: one({ remote_ip: LAN }), cloudflare }).svc("a.jellofin.com");
   assert.equal(s.exposure, "internet");
 });
+test("a forward to an address no known machine has is reported, and machines without a known address become unknown", () => {
+  const assets = [...ASSETS, { assetKey: "pve:guest:150", name: "no-agent-vm", ips: [] }];
+  const r = run({ assets, shape: one({}), router: { ...ROUTER, portForwards: [...ROUTER.portForwards, fwd(3389, "192.168.0.77")] } });
+  const p = r.kinds("upstream_not_in_inventory").find((x) => x.upstream === "192.168.0.77:3389");
+  assert.deepEqual([p.origin, p.hostname], ["router", null]);
+  assert.match(p.reason, /router forwards port 3389/u);
+  assert.equal(r.m("pve:guest:150").exposure, "unknown");
+  assert.match(r.m("pve:guest:150").reason, /address isn't known/u);
+  assert.equal(r.m("pve:guest:110").exposure, "lan", "a machine whose address is known and isn't the target stays lan");
+  assert.equal(run({ assets, shape: one({}) }).m("pve:guest:150").exposure, "lan", "with every public route attributed, an address-less machine can't be a target");
+});
+test("a public route to an address outside the inventory also makes address-less machines unknown", () => {
+  const assets = [...ASSETS, { assetKey: "pve:guest:150", name: "no-agent-vm", ips: [] }];
+  assert.equal(run({ assets, shape: one({}, [proxy("192.168.0.250:80")]) }).m("pve:guest:150").exposure, "unknown");
+  assert.equal(run({ assets, shape: one({}, [proxy("some-name.internal:80")]) }).m("pve:guest:150").exposure, "unknown");
+  assert.equal(run({ assets, shape: one({}), router: { ...ROUTER, dmz: "192.168.0.77" } }).m("pve:guest:150").exposure, "unknown");
+});
+test("a UDP forward to Caddy's port (HTTP/3) counts as a way in", () => {
+  const r = run({ shape: one({}), router: { ...ROUTER, portForwards: [fwd(443, "192.168.0.105", 443, "udp")] } });
+  assert.equal(r.svc("a.jellofin.com").exposure, "internet");
+});

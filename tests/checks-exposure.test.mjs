@@ -41,6 +41,12 @@ test("exposure_routes lists route problems as an issue, each on the machine it c
   assert.match(onTunnel.reason, /c\.jellofin\.com/u);
   assert.match(onTunnel.reason, /d\.jellofin\.com/u);
 });
+test("a router forward to an unknown address shows as an issue on the entry proxy", () => {
+  const r = run(exposureRoutes, caddy, { problems: [{ ...problem("upstream_not_in_inventory", "router", null, "the router forwards port 3389 to 192.168.0.77, an address no known machine has") }] });
+  assert.equal(r.state, "issue");
+  assert.match(r.reason, /3389/u);
+  assert.equal(run(exposureRoutes, cloudflared, { problems: [problem("upstream_not_in_inventory", "router", null)] }).state, "ok");
+});
 test("exposure_routes is unknown when its source is unreadable or only unsupported conditions stand in the way", () => {
   assert.equal(run(exposureRoutes, caddy, { sources: { caddy: "stale", cloudflare: "ok", router: "declared" } }).state, "unknown");
   assert.equal(run(exposureRoutes, cloudflared, { sources: { caddy: "ok", cloudflare: "failed", router: "declared" } }).state, "unknown");

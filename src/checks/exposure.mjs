@@ -20,7 +20,8 @@ export const exposureRoutes = {
   evaluate({ "exposure.map": map }, { asset, config }) {
     const origin = originOf(asset, config);
     const { services = [], problems = [], sources = {} } = map.value;
-    const mine = problems.filter((p) => p.origin === origin);
+    // Router-declared forwards have no machine of their own; they show on the entry proxy.
+    const mine = problems.filter((p) => p.origin === origin || (origin === "caddy" && p.origin === "router"));
     const issues = mine.filter((p) => ISSUE_KINDS.includes(p.kind));
     if (issues.length) return result("issue", list(issues.map((p) => `${p.hostname ?? "(no hostname)"}: ${p.reason}`)));
     if (sources[origin] !== "ok") return result("unknown", `${SOURCE_NAME[origin]} are ${sources[origin] ?? "missing"}; routes can't be checked`);

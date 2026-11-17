@@ -86,7 +86,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
     const ports = listenPorts(e.listen);
     const paths = [];
     if (forwards === null) paths.push({ entry: "forward", reachable: "unknown", gate: e.gate, gateReason: "router port forwards aren't declared" });
-    else if (forwards.some((f) => f.protocol === "tcp" && f.lanIp === caddyAddr && ports.includes(f.lanPort)) || (dmzHost && dmzHost === caddyAddr)) {
+    else if (forwards.some((f) => f.lanIp === caddyAddr && ports.includes(f.lanPort)) || (dmzHost && dmzHost === caddyAddr)) {
       paths.push({ entry: "forward", reachable: evalRestriction(e.restriction, { remoteIp: PUBLIC_VISITOR, clientIp: clientIpFor("forward", e.clientIp, cfg) }), gate: e.gate, gateReason: e.gateReason });
     }
     const viaTunnel = [];
@@ -191,6 +191,20 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
   if (router?.ipv6Inbound !== false) undeclared.push(router?.ipv6Inbound === true ? "inbound IPv6 is allowed" : "inbound IPv6 not declared");
   const baseline = undeclared.length ? { exposure: "unknown", reason: `can't rule out other ways in: ${undeclared.join(", ")}` } : { exposure: "lan", reason: "no public route, forward or tunnel reaches this machine" };
 
+  // Public ways in whose target isn't a machine the engine can name. While
+  // any exist, a machine whose own address is unknown might be that target.
+  const stray = [];
+  for (const f of forwards ?? []) {
+    if (f.lanIp === caddyAddr || byIp.has(f.lanIp)) continue;
+    stray.push(`router forward to ${f.lanIp}:${f.lanPort}`);
+    problem("upstream_not_in_inventory", { upstream: `${f.lanIp}:${f.lanPort}`, reason: `the router forwards port ${f.wanPort} to ${f.lanIp}, an address no known machine has` }, "router");
+  }
+  if (dmzHost && dmzHost !== caddyAddr && !byIp.has(dmzHost)) {
+    stray.push(`router DMZ to ${dmzHost}`);
+    problem("upstream_not_in_inventory", { upstream: dmzHost, reason: `the router's DMZ points at ${dmzHost}, an address no known machine has` }, "router");
+  }
+  for (const s of services) if (s.exposure !== "lan" && s.assetKey == null && (s.upstream || drafts[services.indexOf(s)].unresolved)) stray.push(`${s.hostname} -> ${s.upstream ?? drafts[services.indexOf(s)].unresolved}`);
+
   const machines = new Map();
   for (const a of assets) {
     const ips = a.ips ?? [];
@@ -199,6 +213,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
     const isDmz = dmzHost != null && ips.includes(dmzHost) && dmzHost !== caddyAddr;
     let exposure = baseline.exposure, reason = baseline.reason, role = null;
     const raise = (to, why) => { if (rank[to] > rank[exposure]) { exposure = to; reason = why; } };
+    if (ips.length === 0 && stray.length) raise("unknown", `this machine's address isn't known, and ${stray.length === 1 ? "a public route points" : `${stray.length} public routes point`} at an address outside the inventory (${stray[0]})`);
     for (const { s } of mine) if (s.exposure !== "lan") raise(s.exposure, s.exposure === "internet" ? `serves ${s.hostname}, which is reachable from the internet` : `serves ${s.hostname}, whose exposure can't be established`);
     if (mine.some(({ s }) => s.exposure !== "lan")) role = "app";
     if (directForwards.length || isDmz) {
