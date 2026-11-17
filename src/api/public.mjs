@@ -133,7 +133,9 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       const exposure = readExposureMap(store, t);
       // Without the exposure map nothing can be confirmed urgent; an empty
       // list here would read as "nothing urgent".
-      if (urgent === "true" && exposure.status !== "ok") return [409, { error: `the exposure map is ${exposure.status}, so urgency can't be established`, exposureStatus: exposure.status, ...meta }];
+      if (urgent === "true" && exposure.status !== "ok") return [409, { error: `the exposure map is ${exposure.status}${exposure.detail ? ` (${exposure.detail})` : ""}, so urgency can't be established`, exposureStatus: exposure.status, ...meta }];
+      // Without a current KEV list, findings that may be urgent can't be confirmed either way.
+      if (urgent === "true" && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so the urgent list would be incomplete", exposureStatus: exposure.status, ...meta }];
       const limit = Math.max(1, intParam(url, "limit", 50, 200));
       const offset = intParam(url, "offset", 0, Number.MAX_SAFE_INTEGER);
       const filters = { assetKey: q.get("asset") || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined };
@@ -186,7 +188,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       const score = postureScore({
         findings: all,
         coverage: { inScope: coverageRows.length, withoutFreshCoverage: coverageRows.filter((r) => r.state !== "ok").length },
-        freshness: { findingsStale: meta.findingsStale, kevStale: meta.kevStale, exposureStatus: exposure.status }
+        freshness: { findingsStale: meta.findingsStale, kevStale: meta.kevStale, exposureStatus: exposure.status, exposureDetail: exposure.detail ?? null }
       });
       const names = assetNames();
       return [200, { ...score, deductions: score.deductions.map((d) => ({ ...d, assetName: names.get(d.assetKey) ?? d.assetKey })), rules: { urgency: URGENCY_RULES, score: SCORE_RULES }, exposureStatus: exposure.status, findingsStale: meta.findingsStale, kevStale: meta.kevStale }];

@@ -17,7 +17,7 @@ On `helmsec`:
 cd /opt/helmsman-security && git pull
 cd deploy/caddy && python3 -m http.server 8099 --bind 192.168.0.116
 ```
-Leave it running. On the **Caddy LXC**:
+Leave it running. (If `python3` isn't on helmsec, copy the four files over with `scp` instead.) On the **Caddy LXC**:
 ```
 apt-get install -y jq curl
 useradd --system --no-create-home --shell /usr/sbin/nologin hs-caddy
@@ -32,6 +32,8 @@ systemctl daemon-reload && systemctl enable --now hs-caddy-shape.timer && system
 jq '{version, routes: (.servers[0].routes | length)}' /var/lib/hs-caddy/shape.json
 ```
 Expected last line: `"version": 2` and a route count of 11 or more. Back on `helmsec`, stop the file server with Ctrl+C.
+
+If `systemctl start hs-caddy-shape.service` fails with `226/NAMESPACE`, the LXC doesn't allow the unit's sandboxing: remove the `ProtectSystem`, `ProtectHome` and `PrivateTmp` lines from `/etc/systemd/system/hs-caddy-shape.service`, run `systemctl daemon-reload`, and start it again.
 
 The exporter runs every 5 minutes as its own unprivileged user. It **fails closed**: if Caddy's admin API errors, or the filter fails, or the result doesn't validate, the previous file is left alone. The engine treats a file older than 30 minutes as stale and reports exposure as unknown rather than using old routes.
 
@@ -76,7 +78,7 @@ Nothing else, and no Edit permissions. Save the token in the password manager; *
 
 Note three ids (these are identifiers, not secrets):
 - **Account ID** and **Zone ID**: on the `jellofin.com` overview page, right-hand column.
-- **Tunnel ID**: Zero Trust → Networks → Tunnels → your tunnel (a UUID).
+- **Tunnel ID**: Zero Trust → Networks → Tunnels → your tunnel (a UUID). List **every** tunnel in the account: the engine checks, and if a tunnel exists that isn't listed, the Cloudflare collection fails with a message naming it (an unread tunnel could be a way in).
 
 ## 4. Update the engine's config
 
@@ -97,6 +99,7 @@ r.upnp=false; r.dmz=false; r.ipv6Inbound=false;
 fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
 systemctl restart helmsman-security
 ```
+- When you later make a site LAN-only, `@lan remote_ip private_ranges` in Caddy is understood by the engine.
 - `expectedPrivate` is your own list of sites that should **not** be reachable from the internet. Today they all are (none has a LAN-only rule in Caddy), so the engine will report each as an issue until you add those rules — that is the to-do it is there to track. Edit the list to taste, or leave it `[]`.
 - The router lines are your statement of what the ER605 does. If you later add a port forward or enable UPnP, change them here too; the engine can't see the router.
 - The database upgrades itself on start (schema version 3).
@@ -124,7 +127,7 @@ Expected new entries under ISSUES/UNKNOWNS: `exposure_expected_private` on the C
 
 ## Accepting a risk
 
-Admin page → **Holds, exclusions and risk acceptances** → Kind `acceptance`: machine key, CVE, package and version exactly as the report shows them, a reason, and optionally an expiry. The engine records the finding's situation at that moment (exploited or not, how exposed, which gate) and the acceptance **stops applying by itself** if the package version changes, the CVE becomes actively exploited, the machine becomes more exposed, or its login gate stops being verified. Accepted findings stay listed, marked as accepted.
+Admin page → **Holds, exclusions and risk acceptances** → Kind `acceptance`: machine key, CVE, package and version exactly as the report shows them, a reason, and optionally an expiry. The engine records the finding's situation at that moment (exploited or not, how exposed, which gate) and the acceptance **stops applying by itself** if the package version changes, the CVE becomes actively exploited, the machine becomes more exposed, or its login gate stops being verified. Accepted findings stay listed, marked as accepted. While a finding's exposure is unknown (for example right after a restart, before the exposure map is built), an acceptance is refused: there is no situation yet to accept.
 
 ## Known limits
 
@@ -132,4 +135,5 @@ Admin page → **Holds, exclusions and risk acceptances** → Kind `acceptance`:
 - Which *package* answers a public route is inferred from the listening process name, and is always labelled as such ("possibly urgent"); it never changes the confirmed result.
 - A login gate is verified by its shape in Caddy's config (Authentik forward-auth) or by Cloudflare Access policies. The engine does not test the gate by logging in.
 - Hostnames used as upstreams (instead of IP addresses) aren't resolved; they are reported as a route problem.
-- Without a Cloudflare section in the config, nothing is ever reported as `lan`: the engine can't rule a tunnel out.
+- Without a Cloudflare section in the config, nothing is ever reported as `lan`: the engine can't rule a tunnel out. The urgent list and the score also wait until Caddy, Cloudflare and the machine inventory are all readable.
+- One route the engine can't trace to a machine (an upstream given as a name, an address it doesn't know, an unfamiliar Caddy handler) means no machine can be called `lan` until it is fixed; the route is listed under ROUTE PROBLEMS.

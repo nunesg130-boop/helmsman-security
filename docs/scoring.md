@@ -68,7 +68,7 @@ The score is `incomplete`, with no numbers, when any of these holds:
 
 - vulnerability findings are out of date or were never read;
 - the KEV list is missing or more than 7 days old;
-- the exposure map is missing, stale or its last run failed;
+- the exposure map is missing, stale, its last run failed, or it was built while Caddy's routes, Cloudflare's settings or the machine inventory couldn't be read;
 - more than 20 % of the machines that should be scanned have no current
   vulnerability scan (no machines in scope counts as incomplete too).
 

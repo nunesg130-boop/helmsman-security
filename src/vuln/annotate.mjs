@@ -12,6 +12,13 @@ export function readExposureMap(store, now) {
   if (store.lastRun("exposure")?.status === "failed") return { map: null, status: "failed" };
   if (!ev) return { map: null, status: "missing" };
   if (ev.collectedAt > now + FUTURE_TOLERANCE_MS || now - ev.collectedAt > ev.staleAfterMs) return { map: null, status: "stale" };
+  // A current map built from unreadable sources marks things unknown inside;
+  // it can be used, but it can't confirm that nothing is urgent.
+  const src = ev.value?.sources ?? {};
+  const names = { caddy: "Caddy routes", cloudflare: "Cloudflare settings", inventory: "the machine inventory" };
+  const gaps = Object.entries(names).filter(([k]) => src[k] !== undefined && src[k] !== "ok").map(([k, label]) => `${label} are ${src[k]}`.replace("inventory are", "inventory is"));
+  if (src.caddy === undefined || src.cloudflare === undefined) gaps.push("its sources aren't recorded");
+  if (gaps.length) return { map: ev.value, status: "partial", detail: gaps.join("; ") };
   return { map: ev.value, status: "ok" };
 }
 

@@ -164,3 +164,20 @@ test("the new endpoints need the token, are GET-only, and never include the Clou
     assert.ok(!(await req(port, path)).text.includes(CF_TOKEN), path);
   }
 }));
+
+// --- review fixes ---
+test("a map whose own sources are unreadable doesn't support an urgent list or a score", async () => {
+  await using({ map: { ...MAP, sources: { caddy: "failed", cloudflare: "ok", router: "declared", inventory: "ok" } } }, async (port) => {
+    const r = await req(port, "/api/v1/vulnerabilities?urgent=true");
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /Caddy routes are failed/u);
+    const p = (await req(port, "/api/v1/posture")).body;
+    assert.equal(p.state, "incomplete");
+    assert.match(p.incompleteReasons.join("; "), /Caddy routes are failed/u);
+  });
+});
+test("an out-of-date KEV list refuses the urgent list instead of quietly leaving out KEV findings", () => using({ kev: false }, async (port) => {
+  const r = await req(port, "/api/v1/vulnerabilities?urgent=true");
+  assert.equal(r.status, 409);
+  assert.match(r.body.error, /KEV/u);
+}));

@@ -67,6 +67,8 @@ export function createAdminServer({ db, tenantId, holds, credentials, config, fi
         if (![target.assetKey, target.cve, target.pkg, target.version].every((v) => typeof v === "string" && v)) return send(res, 400, { error: "an acceptance needs assetKey, cve, package and version" });
         const context = findingContext ? findingContext(target) : null;
         if (!context) return send(res, 400, { error: "no such finding on record for that machine, CVE, package and version" });
+        // An acceptance made while exposure is unknown would cover any later exposure.
+        if (context.exposure === "unknown") return send(res, 409, { error: "this finding's exposure can't be established right now, so the risk can't be judged; try again once the exposure map is current" });
         try {
           const id = holds.add({ kind: "acceptance", assetKey: target.assetKey, checkId: target.cve, product: target.pkg, version: target.version, reason: b.reason, expiresAt: b.expiresAt ?? null, context }, now());
           return send(res, 201, { id, context });

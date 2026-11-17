@@ -28,7 +28,7 @@ export function postureScore({ findings, coverage, freshness }) {
   const incompleteReasons = [];
   if (freshness.findingsStale) incompleteReasons.push("vulnerability findings are out of date or were never read");
   if (freshness.kevStale) incompleteReasons.push("the KEV list is missing or more than 7 days old");
-  if (freshness.exposureStatus !== "ok") incompleteReasons.push(`the exposure map is ${freshness.exposureStatus ?? "missing"}`);
+  if (freshness.exposureStatus !== "ok") incompleteReasons.push(`the exposure map is ${freshness.exposureStatus ?? "missing"}${freshness.exposureDetail ? ` (${freshness.exposureDetail})` : ""}`);
   if (cover.inScope === 0) incompleteReasons.push("no machines are in scope for vulnerability scanning");
   else if (cover.withoutFreshCoverage / cover.inScope > MAX_COVERAGE_GAP) {
     incompleteReasons.push(`${cover.withoutFreshCoverage} of ${cover.inScope} machines (${(100 * cover.withoutFreshCoverage / cover.inScope).toFixed(1)} %) have no current vulnerability scan; the limit is 20 %`);

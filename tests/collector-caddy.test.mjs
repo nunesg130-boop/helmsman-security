@@ -106,3 +106,8 @@ test("the collector stores the shape dated at its generation time", async () => 
     await assert.rejects(collectCaddyShape({ http, cfg, now: () => AT + 3600_000 }), (e) => e.code === "parse");
   } finally { await srv.close(); }
 });
+jqTest("the exporter fails on an HTTP error even when the error body is a valid config", async () => {
+  const r = await exporter({ "/config/": () => [500, planted()] }, { seed: "previous-content" });
+  assert.notEqual(r.status, 0);
+  assert.equal(r.text, "previous-content");
+});

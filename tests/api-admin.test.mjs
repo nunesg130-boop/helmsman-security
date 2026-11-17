@@ -13,7 +13,12 @@ async function setup(allowIp = "127.0.0.1") {
   const holds = new HoldStore(db, "default");
   const credentials = new CredentialStore(db, "default", createSecretBox(randomBytes(32)));
   const config = { listen: { adminHost: "127.0.0.1", adminPort: 0, adminAllowIp: allowIp }, owner: { authentikUser: "owner", adminOrigin: ORIGIN } };
-  const findingContext = ({ assetKey, cve, pkg, version }) => (assetKey === "pve:guest:100" && cve === "CVE-2026-0001" && pkg === "jellyfin" && version === "10.9" ? { kev: false, exposure: "host", gate: "authentik" } : null);
+  const findingContext = ({ assetKey, cve, pkg, version }) => {
+    if (cve !== "CVE-2026-0001" || pkg !== "jellyfin" || version !== "10.9") return null;
+    if (assetKey === "pve:guest:100") return { kev: false, exposure: "host", gate: "authentik" };
+    if (assetKey === "pve:guest:101") return { kev: false, exposure: "unknown", gate: null };
+    return null;
+  };
   const srv = await createAdminServer({ db, tenantId: "default", holds, credentials, config, findingContext });
   return { srv, db, holds, credentials };
 }
@@ -128,5 +133,13 @@ test("the admin page offers the acceptance kind with its own fields", async () =
   try {
     const page = (await req(srv.port, "/")).text;
     for (const needle of ['<option value="acceptance">', 'name="cve"', 'name="package"', "acceptance-only"]) assert.ok(page.includes(needle), needle);
+  } finally { await srv.close(); }
+});
+test("a risk can't be accepted while the finding's exposure is unknown", async () => {
+  const { srv } = await setup();
+  try {
+    const r = await req(srv.port, "/admin/holds", { method: "POST", body: { kind: "acceptance", assetKey: "pve:guest:101", cve: "CVE-2026-0001", package: "jellyfin", version: "10.9", reason: "x" } });
+    assert.equal(r.status, 409);
+    assert.match(r.body.error, /exposure can't be established/u);
   } finally { await srv.close(); }
 });
