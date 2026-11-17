@@ -140,8 +140,8 @@ test("evalRestriction is three-valued: unknown client address makes client_ip un
   assert.equal(evalRestriction({ op: "weird" }, src), "unknown");
 });
 test("an unknown handler type makes the answer unknown with the reason", () => {
-  const e = one(resolve([route([{ host: ["a.example"] }], [{ handler: "file_server" }])]), "a.example");
-  assert.deepEqual(e.answer, { kind: "unknown", reason: "unrecognised Caddy handler file_server" });
+  const e = one(resolve([route([{ host: ["a.example"] }], [{ handler: "acme_server" }])]), "a.example");
+  assert.deepEqual(e.answer, { kind: "unknown", reason: "unrecognised Caddy handler acme_server" });
 });
 test("a route with no host matcher is listed for any hostname", () => {
   const entries = resolve([route([{ host: ["a.example"] }], [proxy("10.0.0.5:80")], { terminal: true }), route([], [proxy("10.0.0.9:80")])]);
@@ -154,4 +154,20 @@ test("wildcard hosts, several upstreams, dynamic upstreams and the server's clie
   assert.deepEqual(pick(entries, "*.a.example").map((e) => e.answer.upstream), ["10.0.0.1:80", "10.0.0.2:80"]);
   assert.equal(one(entries, "d.example").answer.kind, "unknown");
   assert.deepEqual(entries[0].clientIp, { trustedProxies: { source: "static", ranges: ["192.168.0.108/32"] }, strict: true, headers: ["Cf-Connecting-Ip"] });
+});
+test("file_server answers from Caddy itself; a rewrite before it changes nothing about who answers", () => {
+  const site = route([{ host: ["192.168.0.105"] }], [{ handler: "subroute", routes: [
+    route([{ remote_ip: { ranges: ["192.168.0.116/32"] } }], [{ handler: "subroute", routes: [route([], [{ handler: "vars" }, { handler: "rewrite" }, { handler: "file_server" }])] }], { group: "g" }),
+    route([], [{ handler: "static_response" }], { group: "g" })
+  ] }], { terminal: true });
+  const entries = pick(resolve([site], { listen: ["192.168.0.105:2020"] }), "192.168.0.105");
+  assert.deepEqual(entries.map((e) => [e.answer, e.restriction.op, e.conditions]), [[{ kind: "static" }, "remote_ip", "none"], [{ kind: "static" }, "not", "none"]]);
+});
+test("a path matcher that runs after a rewrite can't be evaluated: its conditions are unknown", () => {
+  const entries = resolve([route([{ host: ["a.example"] }], [{ handler: "rewrite" }, { handler: "subroute", routes: [route([{ path: ["/admin/*"] }], [proxy("10.0.0.5:80")]), route([], [proxy("10.0.0.6:80")])] }])]);
+  const e = pick(entries, "a.example");
+  assert.ok(e.length >= 2);
+  assert.ok(e.every((x) => x.conditions === "unknown" && /rewrite/u.test(x.conditionReason)), JSON.stringify(e.map((x) => [x.path, x.conditions])));
+  const noPath = one(resolve([route([{ host: ["a.example"] }], [{ handler: "rewrite" }, proxy("10.0.0.5:80")])]), "a.example");
+  assert.equal(noPath.conditions, "none", "no path matcher after the rewrite, nothing to doubt");
 });

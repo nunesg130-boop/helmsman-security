@@ -77,6 +77,7 @@ export function classifyGate(handler) {
   return verified ? "authentik" : "unknown";
 }
 
+// Handlers that neither answer nor decide who does.
 const PASS_THROUGH = ["headers", "encode", "vars"];
 const MAX_OUTCOMES = 64;
 
@@ -100,7 +101,9 @@ const samplePath = (pattern) => { const s = String(pattern).replaceAll("*", "hs-
 function setExpr(set, req) {
   const parts = [];
   if (set.host && !set.host.some((h) => hostMatch(h, req.host))) return F;
-  if (set.path && !set.path.some((p) => globMatch(p, req.path))) return F;
+  // After a rewrite the path a later matcher sees isn't the visitor's path.
+  if (set.path && req.rewritten) parts.push({ op: "unknown", reason: "a path matcher runs after a rewrite, so it can't be evaluated" });
+  else if (set.path && !set.path.some((p) => globMatch(p, req.path))) return F;
   if (set.remote_ip) parts.push({ op: "remote_ip", ranges: set.remote_ip.ranges ?? [] });
   if (set.client_ip) parts.push({ op: "client_ip", ranges: set.client_ip.ranges ?? [] });
   if (set.not) parts.push(not(or(set.not.map((inner) => setExpr(inner, req)))));
@@ -112,7 +115,7 @@ const matchExpr = (match, req) => (!Array.isArray(match) || match.length === 0 ?
 function walk(server, req) {
   const outcomes = [];
   let overflow = false;
-  const answer = (st, ans) => { if (outcomes.length >= MAX_OUTCOMES) overflow = true; else outcomes.push({ ...st, answer: ans }); };
+  const answer = ({ rewritten: _rewritten, ...st }, ans) => { if (outcomes.length >= MAX_OUTCOMES) overflow = true; else outcomes.push({ ...st, answer: ans }); };
 
   function runHandlers(handlers, j, st, next) {
     if (overflow) return;
@@ -121,7 +124,8 @@ function walk(server, req) {
     const rest = (s) => runHandlers(handlers, j + 1, s, next);
     if (h.handler === "subroute") return runList(h.routes ?? [], 0, st, new Set(), rest);
     if (PASS_THROUGH.includes(h.handler)) return rest(st);
-    if (h.handler === "static_response") return answer(st, { kind: "static" });
+    if (h.handler === "rewrite") return rest({ ...st, rewritten: true });
+    if (h.handler === "static_response" || h.handler === "file_server") return answer(st, { kind: "static" });
     if (h.handler === "reverse_proxy") {
       const kind = classifyGate(h);
       if (kind === "authentik") return rest({ ...st, gate: "authentik", gateReason: null, gateUpstream: h.upstreams?.[0] ?? null });
@@ -142,7 +146,7 @@ function walk(server, req) {
     if (i >= routes.length) return done(st);
     const r = routes[i];
     if (r.group && groups.has(r.group)) return runList(routes, i + 1, st, groups, done);
-    const m = matchExpr(r.match, req);
+    const m = matchExpr(r.match, st.rewritten ? { ...req, rewritten: true } : req);
     const taken = and([st.cond, m]);
     if (!isF(taken)) {
       const after = r.group ? new Set([...groups, r.group]) : groups;
