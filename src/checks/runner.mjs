@@ -32,7 +32,7 @@ export function evidenceKey(asset, kind) {
   return asset.assetKey;
 }
 
-function usable(store, asset, kind, now) {
+export function usable(store, asset, kind, now) {
   const key = evidenceKey(asset, kind);
   const ev = key ? store.get(key, kind) : null;
   if (!ev) return { problem: `no ${kind} evidence` };

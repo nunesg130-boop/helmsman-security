@@ -86,7 +86,7 @@ function globMatch(pattern, text) {
   if (!p.includes("*")) return p === t;
   return new RegExp(`^${p.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/gu, "\\$&")).join(".*")}$`, "u").test(t);
 }
-function hostMatch(pattern, host) {
+export function hostMatch(pattern, host) {
   const p = String(pattern).toLowerCase();
   if (!p.includes("*")) return p === host;
   const a = p.split("."), b = host.split(".");

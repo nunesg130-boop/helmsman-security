@@ -8,13 +8,14 @@ export async function collectDocker({ http, hosts, now = Date.now }) {
     const base = h.baseUrl.replace(/\/+$/u, "");
     try {
       const list = await http.fetchJson(`${base}/containers/json?all=1`, { timeoutMs: 8000 });
+      if (!Array.isArray(list)) throw Object.assign(new Error("container list is not a list"), { code: "parse" });
       const version = await http.fetchJson(`${base}/version`, { timeoutMs: 8000 });
       const t = now();
       evidence.push({
         assetKey: h.assetKey,
         kind: "docker.containers",
         collectedAt: t,
-        value: (Array.isArray(list) ? list : []).map((c) => ({
+        value: list.map((c) => ({
           name: String(c.Names?.[0] ?? c.Id ?? "").replace(/^\//u, ""),
           image: c.Image ?? null,
           imageId: c.ImageID ?? null,
@@ -23,6 +24,9 @@ export async function collectDocker({ http, hosts, now = Date.now }) {
           ports: (c.Ports ?? []).map((p) => ({ privatePort: p.PrivatePort ?? null, publicPort: p.PublicPort ?? null, type: p.Type ?? null, ip: p.IP ?? null }))
         }))
       });
+      // all=1 includes stopped containers and the endpoint isn't paged, so a
+      // well-formed answer is the whole list.
+      evidence.push({ assetKey: h.assetKey, kind: "docker.containers.meta", collectedAt: t, value: { complete: true, rows: list.length, all: true } });
       evidence.push({ assetKey: h.assetKey, kind: "docker.engine", collectedAt: t, value: { version: version?.Version ?? null, apiVersion: version?.ApiVersion ?? null } });
     } catch (error) {
       warnings.push(`docker host ${h.name}: ${error.code ?? "error"} ${error.message}`);

@@ -42,6 +42,12 @@ export async function collectWazuh({ adapter, now = Date.now }) {
         for (const [method, kind] of kinds) {
           if (got[method] != null) evidence.push({ assetKey: key, kind, value: got[method], collectedAt: datedAt(method) });
         }
+        // A later "nothing is listening on that port" is only sound if the
+        // port list is known to be whole: every page read, count matching.
+        const meta = adapter.tableMeta?.(agent.id, "ports");
+        if (got.ports != null && meta && Number.isFinite(meta.total) && meta.rows === meta.total && meta.rows === got.ports.length) {
+          evidence.push({ assetKey: key, kind: "wazuh.ports.meta", value: { complete: true, rows: meta.rows, total: meta.total, pages: meta.pages }, collectedAt: datedAt("ports") });
+        }
       } catch (error) {
         if (error.code === "auth") throw error;
         warnings.push(`agent ${agent.id} (${agent.name}) inventory: ${error.code ?? "error"} ${error.message}`);

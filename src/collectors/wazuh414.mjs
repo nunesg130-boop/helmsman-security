@@ -37,6 +37,7 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256, requ
   let token = null;
   const paced = createPacer({ requestsPerMinute, sleep, now });
   const scans = new Map(); // `${id}/${table}` -> newest scan time (ms)
+  const metas = new Map(); // `${id}/${table}` -> { rows, total, pages } of the last read
 
   async function login() {
     const body = await paced(() => http.fetchJson(`${base}${LOGIN}`, {
@@ -59,17 +60,22 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256, requ
     }
   }
 
-  async function all(path) {
+  // Reads every page. `total` is what the API says exists (null if it doesn't
+  // say), so a caller can tell a complete read from one that stopped short.
+  async function allWithMeta(path) {
     const items = [];
-    for (let offset = 0; ; offset += PAGE) {
+    let total = null;
+    for (let offset = 0, pages = 1; ; offset += PAGE, pages++) {
       const body = await get(`${path}?limit=${PAGE}&offset=${offset}`);
       const page = body?.data?.affected_items;
       if (!Array.isArray(page)) throw Object.assign(new Error(`unexpected response for ${path}`), { code: "parse" });
       items.push(...page);
-      const total = Number(body.data.total_affected_items ?? items.length);
-      if (items.length >= total || page.length === 0) return items;
+      const reported = body.data.total_affected_items;
+      total = Number.isFinite(Number(reported)) && reported != null ? Number(reported) : null;
+      if (items.length >= (total ?? items.length) || page.length === 0) return { items, total, pages };
     }
   }
+  const all = async (path) => (await allWithMeta(path)).items;
 
   // os and hardware are single-item endpoints: Wazuh rejects limit/offset
   // on them with HTTP 400. Every other syscollector table is a paged list.
@@ -84,7 +90,13 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256, requ
 
   async function sys(id, table) {
     const path = `/syscollector/${encodeURIComponent(id)}/${table}`;
-    const items = SINGLE.has(table) ? await one(path) : await all(path);
+    let items;
+    if (SINGLE.has(table)) items = await one(path);
+    else {
+      const read = await allWithMeta(path);
+      items = read.items;
+      metas.set(`${id}/${table}`, { rows: items.length, total: read.total, pages: read.pages });
+    }
     const times = items.map((i) => parseScanTime(i?.scan?.time)).filter((t) => t != null);
     scans.set(`${id}/${table}`, times.length ? Math.max(...times) : null);
     return items;
@@ -94,6 +106,8 @@ export function createWazuh414({ http, baseUrl, user, password, certSha256, requ
     version: "4.14",
     // Newest syscollector scan time seen for (agent, table), or null.
     scanTime: (id, table) => scans.get(`${id}/${table}`) ?? null,
+    // How the last read of a paged table went: { rows, total, pages }, or null.
+    tableMeta: (id, table) => metas.get(`${id}/${table}`) ?? null,
     async listAgents() {
       return (await all("/agents")).map((a) => ({
         id: String(a.id),

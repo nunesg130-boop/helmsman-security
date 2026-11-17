@@ -18,9 +18,9 @@ const bypassAll = { decision: "bypass", precedence: 1, include: [{ everyone: {} 
 test("tunnel ingress is normalised, with tunnel-side enforcement kept separately", async () => {
   const { get, srv } = await collect(cloudflareRoutes());
   assert.deepEqual(get("cloudflare.tunnel").tunnels[0].ingress, [
-    { hostname: "ha.jellofin.com", path: null, service: "http://192.168.0.197:8123", catchAll: false, jwtRequired: true, audTags: 1 },
-    { hostname: "manage.jellofin.com", path: null, service: "https://192.168.0.201:443", catchAll: false, jwtRequired: false, audTags: 0 },
-    { hostname: null, path: null, service: "http_status:404", catchAll: true, jwtRequired: false, audTags: 0 }
+    { hostname: "ha.jellofin.com", path: null, service: "http://192.168.0.197:8123", catchAll: false, hostHeader: null, jwtRequired: true, audTags: 1 },
+    { hostname: "manage.jellofin.com", path: null, service: "https://192.168.0.201:443", catchAll: false, hostHeader: null, jwtRequired: false, audTags: 0 },
+    { hostname: null, path: null, service: "http_status:404", catchAll: true, hostHeader: null, jwtRequired: false, audTags: 0 }
   ]);
   assert.equal(srv.requests[0].headers.authorization, "Bearer cf-secret-token");
   assert.ok(srv.requests.every((r) => r.method === "GET"));

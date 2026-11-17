@@ -52,6 +52,8 @@ export async function collectCloudflare({ http, cfg, token, now = Date.now, base
         path: r.path || null,
         service: String(r.service ?? ""),
         catchAll: !r.hostname,
+        // The Host header cloudflared sends on, when it overrides the visitor's.
+        hostHeader: r.originRequest?.httpHostHeader ? String(r.originRequest.httpHostHeader).toLowerCase() : null,
         // Tunnel-side enforcement: cloudflared itself rejects requests without a valid Access token.
         jwtRequired: r.originRequest?.access?.required === true,
         audTags: Array.isArray(r.originRequest?.access?.audTag) ? r.originRequest.access.audTag.length : 0
