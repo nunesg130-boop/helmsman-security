@@ -12,6 +12,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      # The Caddy shape filter tests need jq and must not be skipped in CI.
+      - run: jq --version
       - run: npm run lint
       - run: npm test
       - run: npm run smoke

@@ -1,0 +1,9 @@
+{"admin":{"listen":"localhost:2019"},"apps":{"tls":{"automation":{"policies":[{"issuers":[{"module":"acme","challenges":{"dns":{"provider":{"name":"cloudflare","api_token":"SECRET-TOKEN"}}}}]}]}},
+"http":{"servers":{"srv0":{"listen":[":443"],"trusted_proxies":{"source":"static","ranges":["192.168.0.108/32"]},"trusted_proxies_strict":1,"client_ip_headers":["Cf-Connecting-Ip"],"routes":[
+ {"group":"g1","match":[{"host":["a.example"],"header":{"X-Key":["SECRET-HDR"]}},{"host":["b.example"],"not":[{"remote_ip":{"ranges":["10.0.0.0/8"]},"query":{"k":["SECRET-Q"]}}]}],
+  "handle":[{"handler":"headers","request":{"delete":["X-Authentik-Username"],"set":{"Authorization":["Bearer SECRET2"]}}},
+   {"handler":"reverse_proxy","upstreams":[{"dial":"192.168.0.213:9000"}],"rewrite":{"method":"GET","uri":"/outpost.goauthentik.io/auth/caddy"},"headers":{"request":{"set":{"X-Tok":["SECRET3"]}}},
+    "handle_response":[{"match":{"status_code":[2]},"routes":[{"handle":[{"handler":"vars"}]},{"match":[{"not":[{"vars":{"{x}":[""]}}]}],"handle":[{"handler":"headers","request":{"set":{"X-Authentik-Username":["{http.reverse_proxy.header.X-Authentik-Username}"]}}}]}]}]},
+   {"handler":"reverse_proxy","upstreams":[{"dial":"192.168.0.116:8081"}],"transport":{"protocol":"http","tls":{"client_certificate_key_file":"/SECRET-PATH"}}}],"terminal":true},
+ {"match":[{"host":["c.example"],"client_ip":{"ranges":["192.168.0.0/24"]}}],"handle":[{"handler":"static_response","body":"SECRET-BODY"},{"handler":"weird","secret":"SECRET-W"}]}
+]}}}}}
