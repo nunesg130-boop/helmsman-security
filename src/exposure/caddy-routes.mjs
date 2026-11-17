@@ -3,7 +3,7 @@
 // source-address conditions apply. It follows Caddy's own rules: matcher sets
 // are ORed, matchers in a set are ANDed, routes run in order, `terminal` stops
 // the list, and routes sharing a group are mutually exclusive.
-import { inRanges, parseRange } from "./ip.mjs";
+import { inRanges, isPrivateRange, isValidRange, PUBLIC_VISITOR } from "./ip.mjs";
 
 const T = { op: "true" };
 const F = { op: "false" };
@@ -43,9 +43,12 @@ function findUnknown(e) {
 // Three-valued (Kleene) evaluation of a source-address condition.
 export function evalRestriction(expr, { remoteIp, clientIp }) {
   const ranged = (ip, ranges) => {
-    if (ip === "unknown" || ip == null) return "unknown";
-    if (!Array.isArray(ranges) || ranges.some((r) => parseRange(r) == null)) return inRanges(ip, ranges) ? true : "unknown";
-    return inRanges(ip, ranges);
+    if (ip === "unknown" || ip == null || !Array.isArray(ranges)) return "unknown";
+    const valid = ranges.every(isValidRange);
+    // Some public visitor matches unless every range is private address space.
+    if (ip === PUBLIC_VISITOR) return valid && ranges.every(isPrivateRange) ? false : "unknown";
+    if (inRanges(ip, ranges)) return true;
+    return valid ? false : "unknown";
   };
   switch (expr?.op) {
     case "true": return true;
@@ -80,6 +83,7 @@ export function classifyGate(handler) {
 // Handlers that neither answer nor decide who does.
 const PASS_THROUGH = ["headers", "encode", "vars"];
 const MAX_OUTCOMES = 64;
+const MAX_STEPS = 50_000;
 
 function globMatch(pattern, text) {
   const p = String(pattern).toLowerCase();
@@ -115,10 +119,12 @@ const matchExpr = (match, req) => (!Array.isArray(match) || match.length === 0 ?
 function walk(server, req) {
   const outcomes = [];
   let overflow = false;
-  const answer = ({ rewritten: _rewritten, ...st }, ans) => { if (outcomes.length >= MAX_OUTCOMES) overflow = true; else outcomes.push({ ...st, answer: ans }); };
+  let steps = 0;
+  const answer = ({ rewritten: _rewritten, answered: _answered, ...st }, ans) => { if (outcomes.length >= MAX_OUTCOMES) overflow = true; else outcomes.push({ ...st, answer: ans }); };
+  const tooBig = () => { if (++steps > MAX_STEPS) overflow = true; return overflow; };
 
   function runHandlers(handlers, j, st, next) {
-    if (overflow) return;
+    if (tooBig()) return;
     if (j >= handlers.length) return next(st);
     const h = handlers[j];
     const rest = (s) => runHandlers(handlers, j + 1, s, next);
@@ -129,11 +135,15 @@ function walk(server, req) {
     if (h.handler === "reverse_proxy") {
       const kind = classifyGate(h);
       if (kind === "authentik") return rest({ ...st, gate: "authentik", gateReason: null, gateUpstream: h.upstreams?.[0] ?? null });
-      if (kind === "unknown") {
-        if (st.gate === "authentik") return rest(st);
-        return rest({ ...st, gate: "unknown", gateReason: "a handle_response block doesn't match the verified Authentik pattern", gateUpstream: h.upstreams?.[0] ?? null });
-      }
       const upstreams = (h.upstreams ?? []).filter((u) => typeof u === "string" && u);
+      if (kind === "unknown") {
+        // Not a gate the engine can vouch for. Its upstream may answer the
+        // request itself, or its handle_response may pass it on: both.
+        const next2 = st.gate === "authentik" ? st : { ...st, gate: "unknown", gateReason: "a handle_response block doesn't match the verified Authentik pattern", gateUpstream: upstreams[0] ?? null };
+        if (upstreams.length) for (const upstream of upstreams) answer(next2, { kind: "proxy", upstream });
+        else answer(next2, { kind: "unknown", reason: "reverse_proxy without a fixed upstream" });
+        return rest({ ...next2, answered: true });
+      }
       if (!upstreams.length) return answer(st, { kind: "unknown", reason: "reverse_proxy without a fixed upstream" });
       for (const upstream of upstreams) answer(st, { kind: "proxy", upstream });
       return undefined;
@@ -142,7 +152,7 @@ function walk(server, req) {
   }
 
   function runList(routes, i, st, groups, done) {
-    if (overflow) return;
+    if (tooBig()) return;
     if (i >= routes.length) return done(st);
     const r = routes[i];
     if (r.group && groups.has(r.group)) return runList(routes, i + 1, st, groups, done);
@@ -157,13 +167,38 @@ function walk(server, req) {
     return undefined;
   }
 
-  runList(server.routes ?? [], 0, { cond: T, gate: "none", gateReason: null, gateUpstream: null }, new Set(), () => {});
+  // Falling off the end: Caddy answers an empty 200 itself. Only worth
+  // reporting when an unverified gate ran and nothing else answered.
+  const end = (st) => { if (st.gate === "unknown" && !st.answered) answer(st, { kind: "unknown", reason: "nothing answers after a handle_response block" }); };
+  runList(server.routes ?? [], 0, { cond: T, gate: "none", gateReason: null, gateUpstream: null }, new Set(), end);
   return { outcomes, overflow };
 }
 
 function collect(routes, hosts, paths) {
   const sets = (list) => { for (const set of list ?? []) { set.host?.forEach((h) => hosts.add(String(h).toLowerCase())); set.path?.forEach((p) => paths.add(String(p))); sets(set.not); } };
   for (const r of routes ?? []) { sets(r.match); for (const h of r.handle ?? []) if (h.routes) collect(h.routes, hosts, paths); }
+}
+
+// Could some request path match both patterns? Only provably disjoint
+// pairs (different literal prefixes or suffixes) are ruled out.
+function disjoint(p, q) {
+  const lit = (x) => x.split("*")[0].toLowerCase();
+  const sfx = (x) => (x.includes("*") ? x.slice(x.lastIndexOf("*") + 1).toLowerCase() : x.toLowerCase());
+  const [a, b] = [lit(p), lit(q)];
+  if (a && b && !a.startsWith(b) && !b.startsWith(a)) return true;
+  const [c, d] = [sfx(p), sfx(q)];
+  return Boolean(c && d && !c.endsWith(d) && !d.endsWith(c));
+}
+// A sample path matching both patterns, or null if none was found.
+function bothSample(p, q) {
+  if (globMatch(q, samplePath(p))) return samplePath(p);
+  if (globMatch(p, samplePath(q))) return samplePath(q);
+  for (const [a, b] of [[p, q], [q, p]]) {
+    const c = `${a.replace(/\*+$/u, "")}hs-x${b.replace(/^\*+/u, "")}`.replaceAll("*", "hs-sample");
+    const cand = c.startsWith("/") ? c : `/${c}`;
+    if (globMatch(p, cand) && globMatch(q, cand)) return cand;
+  }
+  return null;
 }
 
 export function resolveCaddyRoutes(shape) {
@@ -190,11 +225,33 @@ export function resolveCaddyRoutes(shape) {
       const rest = toEntries(null, OTHER_PATH);
       const signature = (list) => JSON.stringify(list.map((e) => ({ ...e, path: null })));
       const restSignature = signature(rest);
+      const hostEntries = [];
       for (const pattern of paths) {
         const specific = toEntries(pattern, samplePath(pattern));
-        if (signature(specific) !== restSignature) entries.push(...specific);
+        if (signature(specific) !== restSignature) hostEntries.push(...specific);
       }
-      entries.push(...rest);
+      // Paths matching two patterns at once can take a route neither pattern
+      // takes alone (an ungated *.json under a gated /a/*). Pairs are checked;
+      // a pair with no sample found leaves gates on this host unverified.
+      const list = [...paths];
+      const unresolved = [];
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const [p, q] = [list[i], list[j]];
+          if (disjoint(p, q)) continue;
+          const sample = bothSample(p, q);
+          if (sample == null) { unresolved.push(`${p} and ${q}`); continue; }
+          if (sample === samplePath(p) || sample === samplePath(q)) continue;
+          const combo = toEntries(`${p} & ${q}`, sample);
+          if (signature(combo) !== restSignature) hostEntries.push(...combo);
+        }
+      }
+      hostEntries.push(...rest);
+      if (unresolved.length) {
+        const reason = `overlapping path matchers can't all be checked (${unresolved.join("; ")})`;
+        for (const e of hostEntries) if (e.gate === "authentik") { e.gate = "unknown"; e.gateReason = reason; }
+      }
+      entries.push(...hostEntries);
     }
   }
   return { entries, problems };

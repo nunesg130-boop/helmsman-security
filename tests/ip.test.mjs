@@ -18,3 +18,10 @@ test("private space", () => {
   assert.deepEqual(["192.168.0.108", "10.0.0.1", "172.16.5.5", "172.32.0.1", "8.8.8.8", PUBLIC_VISITOR].map(isPrivate), [true, true, true, false, false, false]);
   assert.deepEqual(["192.168.0.0/24", "192.168.0.108/32", "0.0.0.0/0", "192.0.0.0/8", "10.0.0.0/7", "junk"].map(isPrivateRange), [true, true, false, false, false, false]);
 });
+test("IPv6 ranges are recognised: private ones count as private, none contain an IPv4 address", async () => {
+  const { isValidRange } = await import("../src/exposure/ip.mjs");
+  for (const r of ["fd00::/8", "fc00::/7", "fe80::/10", "::1", "::1/128", "2001:db8::/32"]) assert.ok(isValidRange(r), r);
+  assert.ok(!isValidRange("fd00::/200"));
+  assert.deepEqual(["fd00::/8", "fe80::/10", "::1/128", "2001:db8::/32", "::/0"].map(isPrivateRange), [true, true, true, false, false]);
+  assert.ok(!inRange("127.0.0.1", "::1"));
+});
