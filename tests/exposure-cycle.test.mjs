@@ -19,7 +19,8 @@ const CONFIG = {
   exposure: { caddy: { url: "http://192.168.0.105:2020/shape.json", assetKey: "pve:guest:105", address: "192.168.0.105", maxAgeMinutes: 30, trustedClientIpHeaders: ["Cf-Connecting-Ip"] },
     cloudflare: { accountId: "a", zoneId: "z", tunnelIds: ["t"], assetKey: "pve:guest:108", connectorAddress: "192.168.0.108" }, expectedPrivate: [] }
 };
-const guests = [[105, "caddy", "192.168.0.105"], [108, "cloudflared", "192.168.0.108"], [100, "Jelly-Arr", "192.168.0.7"], [110, "pihole", "192.168.0.2"]].map(([vmid, name, ip]) => ({ vmid, name, node: "norco", type: "lxc", macs: [], ips: [ip] }));
+const guests = [[105, "caddy", "192.168.0.105"], [108, "cloudflared", "192.168.0.108"], [100, "Jelly-Arr", "192.168.0.7"], [110, "pihole", "192.168.0.2"],
+  [109, "docker-apps", "192.168.0.109"], [116, "helmsec", "192.168.0.116"], [104, "seerr", "192.168.0.104"], [122, "wizarr", "192.168.0.122"], [107, "sure", "192.168.0.107"], [125, "wyl", "192.168.0.125"]].map(([vmid, name, ip]) => ({ vmid, name, node: "norco", type: "lxc", macs: [], ips: [ip] }));
 const SOURCES = {
   proxmox: async () => ({ evidence: [], inventory: { nodes: [{ name: "norco", ip: "192.168.0.10" }], guests } }),
   wazuh: async () => ({ evidence: [], inventory: { agents: [{ id: "007", name: "docker-auth", ip: "192.168.0.213", macs: [], status: "active" }] } }),
@@ -42,7 +43,7 @@ test("the cycle stores an exposure map built from the Caddy shape, Cloudflare an
   const { summary, map, machine, store } = await cycle();
   assert.equal(summary.collectors.exposure, "ok");
   assert.equal(store.get("_global", "exposure.map").source, "exposure");
-  assert.deepEqual(map.sources, { caddy: "ok", cloudflare: "ok", router: "declared" });
+  assert.deepEqual(map.sources, { caddy: "ok", cloudflare: "ok", router: "declared", inventory: "ok" });
   const jelly = map.services.find((s) => s.hostname === "jellyprox.jellofin.com");
   assert.deepEqual([jelly.exposure, jelly.assetKey, jelly.publicDns], ["internet", "pve:guest:100", true]);
   assert.deepEqual([machine("pve:guest:100").exposure, machine("pve:guest:100").role, machine("pve:guest:100").name], ["internet", "app", "Jelly-Arr"]);
@@ -101,4 +102,16 @@ test("a version 2 database migrates to version 3 with its holds kept, and accept
   db.prepare("INSERT INTO holds (tenant_id, kind, asset_key, check_id, product, version, reason, created_at, context_json) VALUES ('default','acceptance','a','CVE-1','p','1','ok',1,'{}')").run();
   assert.throws(() => db.prepare("INSERT INTO holds (tenant_id, kind, asset_key, reason, created_at) VALUES ('default','other','a','x',1)").run());
   db.close();
+});
+test("when the Proxmox inventory stops refreshing, the map says so and nothing is lan", async () => {
+  const db = openDb(":memory:");
+  const store = new EvidenceStore(db, "default");
+  const args = { db, tenantId: "default", store, holds: new HoldStore(db, "default"), ledger: new LedgerStore(db, "default"), config: CONFIG };
+  await collectionCycle({ ...args, sources: SOURCES, now: () => NOW });
+  const later = NOW + 15 * 60_000;
+  const fresh = (kind) => async () => { const out = await SOURCES[kind](); return { ...out, evidence: (out.evidence ?? []).map((e) => ({ ...e, collectedAt: later, value: e.kind === "caddy.shape" ? { ...e.value, generatedAt: later } : e.value })) }; };
+  await collectionCycle({ ...args, sources: { ...SOURCES, caddy: fresh("caddy"), cloudflare: fresh("cloudflare"), proxmox: async () => { throw new Error("401"); } }, now: () => later });
+  const map = store.get("_global", "exposure.map").value;
+  assert.equal(map.sources.inventory, "failed");
+  assert.equal(map.machines.find((m) => m.assetKey === "pve:guest:110").exposure, "unknown");
 });

@@ -1,4 +1,5 @@
 import { result } from "../states.mjs";
+import { hostMatch } from "../exposure/caddy-routes.mjs";
 
 // Checks on the machines public traffic enters through. They read the
 // exposure map; a missing, stale or failed map makes them unknown before
@@ -59,7 +60,8 @@ export const exposureExpectedPrivate = {
   evaluate({ "exposure.map": map }, { config }) {
     const { services = [], sources = {} } = map.value;
     const expected = config.exposure.expectedPrivate.map((h) => h.toLowerCase());
-    const of = (h) => services.filter((s) => s.hostname === h);
+    // Wildcard and catch-all routes serve these names too.
+    const of = (h) => services.filter((s) => s.hostname === "*" || hostMatch(s.hostname, h));
     const exposed = expected.filter((h) => of(h).some((s) => s.exposure === "internet"));
     if (exposed.length) return result("issue", `reachable from the internet: ${list(exposed)}`);
     const sourcesOk = sources.caddy === "ok" && sources.cloudflare === "ok";

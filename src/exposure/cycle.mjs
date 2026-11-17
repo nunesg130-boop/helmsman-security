@@ -4,6 +4,7 @@
 import { resolveExposure } from "./resolve.mjs";
 import { listenerEvidence } from "./listeners.mjs";
 import { parseV4 } from "./ip.mjs";
+import { INVENTORY_KEY } from "../checks/runner.mjs";
 
 const FUTURE_TOLERANCE_MS = 60_000;
 
@@ -51,6 +52,16 @@ export function buildExposureMap({ store, config, assets, inventories, now }) {
     const owner = machines.find((a) => !a.assetKey.startsWith("wazuh:agent:") && a.sources?.wazuh?.id === String(agent.id)) ?? machines.find((a) => a.assetKey === `wazuh:agent:${agent.id}`);
     if (owner) add(owner.assetKey, agent.ip);
   }
+  // Machine addresses are only as good as the inventories they came from.
+  const rankOf = { ok: 0, stale: 1, missing: 2, failed: 3 };
+  let inventory = "ok";
+  for (const name of ["proxmox", "wazuh"]) {
+    const run = store.lastRun(name);
+    if (!run) continue; // not configured
+    const ev = store.get(INVENTORY_KEY, `inventory.${name}`);
+    const status = run.status === "failed" ? "failed" : !ev ? "missing" : now - ev.collectedAt > ev.staleAfterMs || ev.collectedAt > now + FUTURE_TOLERANCE_MS ? "stale" : "ok";
+    if (rankOf[status] > rankOf[inventory]) inventory = status;
+  }
   const byKey = new Map(machines.map((a) => [a.assetKey, a]));
   const router = declaredRouter(config.network);
 
@@ -58,6 +69,7 @@ export function buildExposureMap({ store, config, assets, inventories, now }) {
     caddy, cloudflare, router,
     assets: machines.map((a) => ({ assetKey: a.assetKey, name: a.name, ips: [...ips.get(a.assetKey)] })),
     listeners: (assetKey) => (byKey.has(assetKey) ? listenerEvidence(byKey.get(assetKey), store, now) : undefined),
+    inventory,
     config: ex
   });
   return {

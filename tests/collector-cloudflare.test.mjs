@@ -60,7 +60,7 @@ test("a short page count, success:false, a missing ingress list and auth errors 
   await assert.rejects(collect(denied), (e) => e.code === "auth" && !e.message.includes("cf-secret-token"));
 });
 
-const app = (domains, policies) => ({ id: "x", domains, policies });
+const app = (domains, policies) => ({ id: "x", type: "self_hosted", domains, policies });
 const P = { allow: { decision: "allow", includesEveryone: false }, bypassAll: { decision: "bypass", includesEveryone: true }, bypassSome: { decision: "bypass", includesEveryone: false }, odd: { decision: "magic", includesEveryone: false } };
 
 test("an application that only allows or denies protects its host", () => {
@@ -73,7 +73,7 @@ test("a bypass for everyone is not protection; a partial bypass or an unrecognis
   assert.equal(accessProtection("h", null, [app([{ hostname: "h", path: null }], [P.allow, P.bypassAll])]), "bypassed");
   assert.equal(accessProtection("h", null, [app([{ hostname: "h", path: null }], [P.allow, P.bypassSome])]), "unknown");
   assert.equal(accessProtection("h", null, [app([{ hostname: "h", path: null }], [P.odd])]), "unknown");
-  assert.equal(accessProtection("h", null, [{ id: "x", domains: [{ hostname: "h", path: null }] }]), "unknown");
+  assert.equal(accessProtection("h", null, [{ id: "x", type: "self_hosted", domains: [{ hostname: "h", path: null }] }]), "unknown");
   assert.equal(accessProtection("h", null, undefined), "unknown");
 });
 test("a more specific application overrides the broader one for its path, and weakens the host as a whole", () => {
@@ -92,4 +92,33 @@ test("wildcard application domains cover subdomains only", () => {
   const apps = [app([{ hostname: "*.example.com", path: null }], [P.allow])];
   assert.equal(accessProtection("a.example.com", null, apps), "protected");
   assert.equal(accessProtection("example.com", null, apps), "none");
+});
+
+// --- review fixes ---
+test("a tunnel in the account that isn't in the config fails the run, naming it", async () => {
+  const routes = cloudflareRoutes({ tunnelList: [{ id: "t1", name: "home", status: "healthy" }, { id: "t9", name: "spare", status: "down" }] });
+  await assert.rejects(collect(routes), (e) => e.code === "parse" && /t9/u.test(e.message) && /spare/u.test(e.message) && /tunnelIds/u.test(e.message));
+  const { srv } = await collect(cloudflareRoutes());
+  assert.ok(srv.requests.some((r) => r.url.startsWith("/client/v4/accounts/acc/cfd_tunnel?is_deleted=false")));
+});
+const everyoneServiceAuth = { decision: "non_identity", includesEveryone: true };
+test("service-auth or allow for everyone isn't protection", () => {
+  assert.equal(accessProtection("h", null, [app([{ hostname: "h", path: null }], [everyoneServiceAuth])]), "bypassed");
+  assert.equal(accessProtection("h", null, [app([{ hostname: "h", path: null }], [{ decision: "allow", includesEveryone: true }])]), "unknown");
+});
+test("only self-hosted applications protect; a bookmark app on the same name doesn't", () => {
+  const typed = (type) => ({ ...app([{ hostname: "h", path: null }], [P.allow]), type });
+  assert.equal(accessProtection("h", null, [typed("bookmark")]), "none");
+  assert.equal(accessProtection("h", null, [typed("self_hosted")]), "protected");
+  assert.equal(accessProtection("h", null, [typed(undefined)]), "unknown", "an application whose type isn't known");
+});
+test("a weaker application deeper under the asked path weakens it", () => {
+  const apps = [{ ...app([{ hostname: "h", path: null }], [P.allow]), type: "self_hosted" }, { ...app([{ hostname: "h", path: "/app/webhook" }], [P.bypassAll]), type: "self_hosted" }];
+  assert.equal(accessProtection("h", "/app/", apps), "bypassed");
+  assert.equal(accessProtection("h", "/other/", apps), "protected");
+});
+test("a wildcard name is weakened by any application on a name it covers", () => {
+  const apps = [{ ...app([{ hostname: "*.example.com", path: null }], [P.allow]), type: "self_hosted" }, { ...app([{ hostname: "a.example.com", path: null }], [P.bypassAll]), type: "self_hosted" }];
+  assert.equal(accessProtection("*.example.com", null, apps), "bypassed");
+  assert.equal(accessProtection("b.example.com", null, apps), "protected");
 });

@@ -41,6 +41,12 @@ export async function collectCloudflare({ http, cfg, token, now = Date.now, base
   }
 
   const acct = `/accounts/${encodeURIComponent(cfg.accountId)}`;
+  // Every tunnel in the account is a possible way in. One that isn't read
+  // would make "LAN-only" claims unsound, so an unlisted tunnel fails the run.
+  const unlisted = (await paged(`${acct}/cfd_tunnel?is_deleted=false`)).filter((t) => !t.deleted_at && !cfg.tunnelIds.includes(String(t.id)));
+  if (unlisted.length) {
+    throw parseError(`Cloudflare tunnel ${unlisted.map((t) => `${t.id} ("${t.name ?? "unnamed"}")`).join(", ")} exists but isn't in exposure.cloudflare.tunnelIds; add it so its routes are read`);
+  }
   const tunnels = [];
   for (const id of cfg.tunnelIds) {
     const ingress = (await call(`${acct}/cfd_tunnel/${encodeURIComponent(id)}/configurations`)).result?.config?.ingress;
@@ -94,34 +100,50 @@ const hostCovers = (pattern, hostname) => pattern === hostname || (pattern.start
 const RANK = { protected: 0, unknown: 1, bypassed: 2, none: 3 };
 const weakest = (list) => list.reduce((a, b) => (RANK[b] > RANK[a] ? b : a));
 
-// What one application's policies amount to. Only allow/deny/service-auth
-// policies with no bypass count as protection; anything unrecognised is unknown.
+// Application types that put Access in front of an origin. Others (bookmark,
+// SaaS, launcher) protect nothing on the hostname.
+const PROTECTING_TYPES = new Set(["self_hosted", "ssh", "vnc", "rdp"]);
+
+// What one application's policies amount to, or null if it doesn't apply.
+// Only allow/deny/service-auth for specific identities count as protection.
 function appProtection(app) {
+  if (app.type == null) return "unknown";
+  if (!PROTECTING_TYPES.has(app.type)) return null;
   if (!Array.isArray(app.policies)) return "unknown";
   let result = "protected";
   for (const p of app.policies) {
     if (p.decision === "bypass") result = weakest([result, p.includesEveryone ? "bypassed" : "unknown"]);
+    else if (p.decision === "non_identity" && p.includesEveryone) result = weakest([result, "bypassed"]);
+    else if (p.decision === "allow" && p.includesEveryone) result = weakest([result, "unknown"]); // anyone who can log in
     else if (!["allow", "deny", "non_identity"].includes(p.decision)) result = weakest([result, "unknown"]);
   }
   return result;
 }
 
 // Is a request for hostname + path behind Cloudflare Access?
-//   path given: the most specific application covering it decides.
-//   path null ("the whole host"): the host-wide application decides, weakened
-//   by any more specific application on the same host that is weaker.
+//   The most specific application covering the path decides, weakened by any
+//   application deeper under it (a bypass on /app/webhook weakens /app/).
+//   path null means "anywhere on the host". A wildcard hostname is weakened by
+//   applications on any name it covers.
 export function accessProtection(hostname, path, apps) {
   if (!Array.isArray(apps)) return "unknown";
   const host = String(hostname ?? "").toLowerCase();
-  const covering = [];
-  for (const app of apps) for (const d of app.domains ?? []) if (hostCovers(d.hostname, host)) covering.push({ path: d.path, protection: appProtection(app) });
-  if (path == null) {
-    const wide = covering.filter((c) => c.path == null);
-    if (!wide.length) return "none";
-    return weakest([weakest(wide.map((c) => c.protection)), ...covering.filter((c) => c.path != null).map((c) => c.protection)]);
+  const wild = host.includes("*");
+  const related = [];
+  for (const app of apps) {
+    const protection = appProtection(app);
+    if (protection == null) continue;
+    for (const d of app.domains ?? []) {
+      if (hostCovers(d.hostname, host)) related.push({ path: d.path, protection, covers: true });
+      else if (wild && hostCovers(host, d.hostname)) related.push({ path: d.path, protection, covers: false });
+    }
   }
-  const matching = covering.filter((c) => c.path == null || path.startsWith(c.path));
-  if (!matching.length) return "none";
-  const longest = Math.max(...matching.map((c) => (c.path ?? "").length));
-  return weakest(matching.filter((c) => (c.path ?? "").length === longest).map((c) => c.protection));
+  const matching = related.filter((c) => c.covers && (c.path == null || (path != null && path.startsWith(c.path))));
+  const deeper = related.filter((c) => !matching.includes(c) && (!c.covers || (c.path != null && c.path.startsWith(path ?? ""))));
+  let base = "none";
+  if (matching.length) {
+    const longest = Math.max(...matching.map((c) => (c.path ?? "").length));
+    base = weakest(matching.filter((c) => (c.path ?? "").length === longest).map((c) => c.protection));
+  }
+  return weakest([base, ...deeper.map((c) => c.protection)]);
 }

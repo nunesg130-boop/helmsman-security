@@ -42,7 +42,8 @@ export function listenerEvidence(asset, store, now) {
 // { listening: true|false|null, process, container } for one address, port and protocol.
 export function listenerMatch({ ip, port, protocol = "tcp" }, evidence) {
   const want = proto(protocol);
-  const onAddress = (bound) => bound === ip || WILDCARDS.has(String(bound ?? ""));
+  const LOOPBACK = ["127.0.0.1", "::1"];
+  const onAddress = (bound) => bound === ip || WILDCARDS.has(String(bound ?? "")) || (LOOPBACK.includes(ip) && LOOPBACK.includes(bound));
   const { ports, containers, dockerHost } = evidence ?? { ports: { rows: [], fresh: false, complete: false }, containers: null, dockerHost: "unmonitored" };
 
   const row = ports.fresh ? ports.rows.find((r) => proto(r.protocol) === want && Number(r.localPort) === port && onAddress(r.localIp)) : null;

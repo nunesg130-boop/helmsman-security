@@ -83,3 +83,11 @@ test("a failed, stale or missing exposure map makes all three unknown", () => {
     assert.equal(run(c, caddy, null).state, "unknown", c.id);
   }
 });
+test("exposure_expected_private counts wildcard and catch-all routes", () => {
+  const cfg = { config: { exposure: { ...CONFIG.exposure, expectedPrivate: ["nas.jellofin.com"] } } };
+  assert.equal(run(exposureExpectedPrivate, caddy, { services: [svc("*.jellofin.com")] }, cfg).state, "issue");
+  assert.equal(run(exposureExpectedPrivate, caddy, { services: [svc("*")] }, cfg).state, "issue");
+  assert.equal(run(exposureExpectedPrivate, caddy, { services: [svc("*.jellofin.com", { exposure: "lan" })] }, cfg).state, "ok");
+  // No route of any kind serves the name, and every source was read: not reachable.
+  assert.equal(run(exposureExpectedPrivate, caddy, { services: [svc("other.jellofin.com")] }, cfg).state, "ok");
+});
