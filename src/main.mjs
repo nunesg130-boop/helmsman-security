@@ -88,7 +88,7 @@ export async function start({
   if (eolBase !== EOL_BASE) hosts.allowHosts.push(new URL(eolBase).hostname);
   for (const [url, real] of [[kevUrl, KEV_URL], [epssUrl, EPSS_URL]]) if (url !== real) hosts.allowHosts.push(new URL(url).hostname);
   const http = createHttp(hosts);
-  const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
+  const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "cloudflare.apiToken", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
 
   const sources = {};
   if (config.proxmox) sources.proxmox = () => collectProxmox({ http, cfg: config.proxmox, secret: requireCredential(credentials, "proxmox.tokenSecret"), now });

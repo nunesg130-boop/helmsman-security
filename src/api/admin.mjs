@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 // owner header; changes must be same-origin JSON.
 const PAGE = readFileSync(new URL("./admin-page.html", import.meta.url), "utf8");
 const MAX_BODY = 64 * 1024;
-const SETTABLE = new Set(["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword"]);
+const SETTABLE = new Set(["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "cloudflare.apiToken"]);
 
 const stripV4Mapped = (ip) => String(ip ?? "").replace(/^::ffff:/u, "");
 

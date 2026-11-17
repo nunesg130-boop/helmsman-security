@@ -83,6 +83,10 @@ test("admin listener", async (t) => {
     assert.ok(!(await req(srv.port, "/admin/credentials")).text.includes("ix-secret"));
     assert.equal(credentials.get("wazuh.indexerPassword"), "ix-secret");
   });
+  await t.test("the Cloudflare token can be set and is write-only", async () => {
+    assert.equal((await req(srv.port, "/admin/credentials/cloudflare.apiToken", { method: "PUT", body: { value: "cf-secret-tok" } })).status, 204);
+    assert.ok(!(await req(srv.port, "/admin/credentials")).text.includes("cf-secret-tok"));
+  });
   await t.test("the API token can't be set directly", async () => {
     assert.equal((await req(srv.port, "/admin/credentials/api.readToken", { method: "PUT", body: { value: "mine" } })).status, 400);
   });
