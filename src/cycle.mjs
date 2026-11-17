@@ -2,7 +2,8 @@ import { runCollector } from "./collect.mjs";
 import { linkAssets } from "./identity.mjs";
 import { evaluateAll } from "./ledger.mjs";
 import { threshold } from "./checks/thresholds.mjs";
-import { INVENTORY_KEY } from "./checks/runner.mjs";
+import { INVENTORY_KEY, GLOBAL_KEY } from "./checks/runner.mjs";
+import { buildExposureMap } from "./exposure/cycle.mjs";
 
 function staleAfterMs(config) {
   return threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
@@ -63,6 +64,15 @@ export async function collectionCycle({ db, tenantId, store, holds, ledger, conf
     assetKey: r.asset_key, class: r.class, name: r.name, sources: JSON.parse(r.sources_json),
     ...(r.ambiguous_reason ? { ambiguous: true, ambiguousReason: r.ambiguous_reason } : {})
   }));
+  // Exposure is resolved from this cycle's evidence, in a run of its own: if
+  // it fails, the previous map ages out and everything reads as unknown.
+  if (config.exposure) {
+    const r = await runCollector(store, "exposure", async () => ({
+      evidence: [{ assetKey: GLOBAL_KEY, kind: "exposure.map", source: "exposure", value: buildExposureMap({ store, config, assets: known, inventories: { proxmox: inv("proxmox"), wazuh: inv("wazuh") }, now: t }) }]
+    }), { now, staleAfterMs: stale, secrets });
+    statuses.exposure = r.status;
+  }
+
   const rows = evaluateAll({ store, holds, assets: known, config, now: t });
   ledger.write(rows, t);
   return { collectors: statuses, assets: known.length, rows: rows.length };

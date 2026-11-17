@@ -14,6 +14,8 @@ import { collectProxmox } from "./collectors/proxmox.mjs";
 import { collectWazuh } from "./collectors/wazuh.mjs";
 import { createWazuh414 } from "./collectors/wazuh414.mjs";
 import { collectDocker } from "./collectors/docker.mjs";
+import { collectCaddyShape } from "./collectors/caddy-shape.mjs";
+import { collectCloudflare } from "./collectors/cloudflare.mjs";
 import { collectEolDataset, EOL_BASE } from "./collectors/eol-dataset.mjs";
 import { collectionCycle, eolCycle } from "./cycle.mjs";
 import { runCollector } from "./collect.mjs";
@@ -64,7 +66,9 @@ export async function start({
   kevUrl = KEV_URL,
   epssUrl = EPSS_URL,
   feedCertSha256 = null, // tests only: pin local stand-ins for the threat feeds
-  feedMinimums = {} // tests only: { minKev, minEpss }
+  feedMinimums = {}, // tests only: { minKev, minEpss }
+  cloudflareBase = null, // tests only: a local stand-in for the Cloudflare API
+  cloudflareCertSha256 = null
 } = {}) {
   const config = loadConfig(configPath);
   const box = createSecretBox(loadMasterKey(keyPath));
@@ -87,6 +91,7 @@ export async function start({
   const hosts = egressHosts(config);
   if (eolBase !== EOL_BASE) hosts.allowHosts.push(new URL(eolBase).hostname);
   for (const [url, real] of [[kevUrl, KEV_URL], [epssUrl, EPSS_URL]]) if (url !== real) hosts.allowHosts.push(new URL(url).hostname);
+  if (cloudflareBase) hosts.allowHosts.push(new URL(cloudflareBase).hostname);
   const http = createHttp(hosts);
   const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "cloudflare.apiToken", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
 
@@ -99,6 +104,13 @@ export async function start({
     });
   }
   if (config.docker.length) sources.docker = () => collectDocker({ http, hosts: config.docker, now });
+  // Exposure sources: the route shape Caddy's host exports, and Cloudflare's
+  // tunnel, Access and DNS settings (read-only token).
+  if (config.exposure?.caddy) sources.caddy = () => collectCaddyShape({ http, cfg: config.exposure.caddy, now });
+  if (config.exposure?.cloudflare) {
+    sources.cloudflare = () => collectCloudflare({ http, cfg: config.exposure.cloudflare, token: requireCredential(credentials, "cloudflare.apiToken"), now,
+      ...(cloudflareBase ? { base: cloudflareBase, certSha256: cloudflareCertSha256 } : {}) });
+  }
 
   // The first vulnerability read waits for the first collection, so findings
   // are filed under machines the engine already knows.

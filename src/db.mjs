@@ -132,6 +132,26 @@ const MIGRATIONS = [
     count INTEGER NOT NULL,
     PRIMARY KEY (tenant_id, name)
   );
+  `,
+  // v3: risk acceptances (a third kind of hold, with the context it was made in)
+  `
+  CREATE TABLE holds_v3 (
+    id INTEGER PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('hold','exclusion','acceptance')),
+    asset_key TEXT NOT NULL,
+    check_id TEXT,
+    product TEXT,
+    version TEXT,
+    reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    context_json TEXT
+  );
+  INSERT INTO holds_v3 (id, tenant_id, kind, asset_key, check_id, product, version, reason, expires_at, created_at)
+    SELECT id, tenant_id, kind, asset_key, check_id, product, version, reason, expires_at, created_at FROM holds;
+  DROP TABLE holds;
+  ALTER TABLE holds_v3 RENAME TO holds;
   `
 ];
 

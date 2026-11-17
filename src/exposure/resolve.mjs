@@ -64,9 +64,9 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
   const forwards = Array.isArray(router?.portForwards) ? router.portForwards : null;
   const dmzHost = typeof router?.dmz === "string" ? router.dmz : null;
   const problems = [];
-  const problem = (kind, p) => problems.push({ kind, hostname: null, upstream: null, assetKey: null, ...p });
+  const problem = (kind, p, origin = "caddy") => problems.push({ kind, origin, hostname: null, upstream: null, assetKey: null, ...p });
   if (!caddyOk) problem("source_unreadable", { reason: `Caddy routes are ${sources.caddy}; exposure through Caddy is unknown` });
-  if (!cfOk) problem("source_unreadable", { reason: `Cloudflare tunnel and Access settings are ${sources.cloudflare}; exposure through the tunnel is unknown` });
+  if (!cfOk) problem("source_unreadable", { reason: `Cloudflare tunnel and Access settings are ${sources.cloudflare}; exposure through the tunnel is unknown` }, "cloudflare");
 
   const byIp = new Map();
   for (const a of assets) for (const ip of a.ips ?? []) byIp.set(ip, [...(byIp.get(ip) ?? []), a.assetKey]);
@@ -103,7 +103,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
   }
   for (const r of toCaddy) {
     const ports = new Set(entries.entries.flatMap((e) => listenPorts(e.listen)));
-    if (caddyOk && !ports.has(r.target.port)) problem("unsupported_condition", { hostname: r.hostname, reason: `a tunnel rule points at Caddy port ${r.target.port}, which isn't in the route shape` });
+    if (caddyOk && !ports.has(r.target.port)) problem("unsupported_condition", { hostname: r.hostname, reason: `a tunnel rule points at Caddy port ${r.target.port}, which isn't in the route shape` }, "cloudflare");
   }
 
   // 2. Services a tunnel reaches directly, bypassing Caddy.
@@ -111,7 +111,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
     if (r.target.kind === "none" || toCaddy.includes(r)) continue;
     const hostname = r.hostname ?? "*";
     if (r.target.kind === "unknown") {
-      problem("upstream_unresolvable", { hostname, upstream: r.service, reason: "tunnel service isn't a recognised address" });
+      problem("upstream_unresolvable", { hostname, upstream: r.service, reason: "tunnel service isn't a recognised address" }, "cloudflare");
       drafts.push({ entry: null, hostname, path: r.path ?? null, paths: [{ entry: "tunnel-direct", reachable: true, gate: accessGate(r.hostname, r.path ?? null), gateReason: null }], tunnelRules: [r], upstream: null, unresolved: r.service });
       continue;
     }
@@ -129,6 +129,8 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
   const stronger = (a, b) => (a == null || rank[b] > rank[a] ? b : a);
   const services = drafts.map((d) => {
     const e = d.entry;
+    const origin = e ? "caddy" : "cloudflare";
+    const problem = (kind, p, from = origin) => problems.push({ kind, origin: from, hostname: null, upstream: null, assetKey: null, ...p });
     const reach = d.paths.map((p) => p.reachable);
     const exposure = reach.includes(true) ? "internet" : reach.includes("unknown") || e?.conditions === "unknown" ? "unknown" : "lan";
     const { gate, gateReason } = effectiveGate(d.paths, { gate: e?.gate ?? "none", gateReason: e?.gateReason });
@@ -158,7 +160,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
     const forward = d.paths.find((p) => p.entry === "forward");
     const tunnelled = d.paths.some((p) => p.entry === "tunnel-via-caddy" && p.reachable === true);
     if (e && e.restriction.op !== "true" && tunnelled && forward?.reachable !== true) {
-      problem("restriction_bypassed_by_tunnel", { ...base, assetKey, reason: "the route's address restriction doesn't stop requests arriving through the Cloudflare tunnel" });
+      problem("restriction_bypassed_by_tunnel", { ...base, assetKey, reason: "the route's address restriction doesn't stop requests arriving through the Cloudflare tunnel" }, "cloudflare");
     }
     if (e?.gateUpstream && exposure !== "lan") {
       const dial = parseDial(e.gateUpstream);
