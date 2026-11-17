@@ -13,7 +13,8 @@ async function setup(allowIp = "127.0.0.1") {
   const holds = new HoldStore(db, "default");
   const credentials = new CredentialStore(db, "default", createSecretBox(randomBytes(32)));
   const config = { listen: { adminHost: "127.0.0.1", adminPort: 0, adminAllowIp: allowIp }, owner: { authentikUser: "owner", adminOrigin: ORIGIN } };
-  const srv = await createAdminServer({ db, tenantId: "default", holds, credentials, config });
+  const findingContext = ({ assetKey, cve, pkg, version }) => (assetKey === "pve:guest:100" && cve === "CVE-2026-0001" && pkg === "jellyfin" && version === "10.9" ? { kev: false, exposure: "host", gate: "authentik" } : null);
+  const srv = await createAdminServer({ db, tenantId: "default", holds, credentials, config, findingContext });
   return { srv, db, holds, credentials };
 }
 
@@ -104,4 +105,28 @@ test("admin listener", async (t) => {
     assert.equal((await req(srv.port, "/admin/links?source=wazuh&sourceId=007", { method: "DELETE" })).status, 204);
     assert.equal((await req(srv.port, "/admin/links")).body.items.length, 0);
   });
+});
+
+test("risk acceptances are created against a real finding, with its context captured by the server", async () => {
+  const { srv, holds } = await setup();
+  try {
+    const body = { kind: "acceptance", assetKey: "pve:guest:100", cve: "CVE-2026-0001", package: "jellyfin", version: "10.9", reason: "patch window Friday", context: { kev: true, exposure: "none", gate: null } };
+    const add = await req(srv.port, "/admin/holds", { method: "POST", body });
+    assert.equal(add.status, 201);
+    const [row] = (await req(srv.port, "/admin/holds")).body.items;
+    assert.deepEqual([row.kind, row.checkId, row.product, row.version, row.context], ["acceptance", "CVE-2026-0001", "jellyfin", "10.9", { kev: false, exposure: "host", gate: "authentik" }], "context comes from current data, not from the request");
+    assert.ok(holds.activeAcceptance("pve:guest:100", "CVE-2026-0001", "jellyfin", "10.9", { kev: false, exposure: "host", gate: "authentik" }, Date.now()));
+    const unknown = await req(srv.port, "/admin/holds", { method: "POST", body: { ...body, cve: "CVE-2026-9999" } });
+    assert.equal(unknown.status, 400);
+    assert.match(unknown.body.error, /no such finding/u);
+    assert.equal((await req(srv.port, "/admin/holds", { method: "POST", body: { ...body, reason: "" } })).status, 400);
+    assert.equal((await req(srv.port, "/admin/holds", { method: "POST", body: { ...body, package: undefined } })).status, 400);
+  } finally { await srv.close(); }
+});
+test("the admin page offers the acceptance kind with its own fields", async () => {
+  const { srv } = await setup();
+  try {
+    const page = (await req(srv.port, "/")).text;
+    for (const needle of ['<option value="acceptance">', 'name="cve"', 'name="package"', "acceptance-only"]) assert.ok(page.includes(needle), needle);
+  } finally { await srv.close(); }
 });

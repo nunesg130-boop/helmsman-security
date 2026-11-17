@@ -23,6 +23,7 @@ import { createWazuhIndexer414 } from "./collectors/wazuh-indexer414.mjs";
 import { refreshThreatFeeds } from "./collectors/threat-feeds.mjs";
 import { FindingStore } from "./vuln/findings.mjs";
 import { vulnCycle } from "./vuln/cycle.mjs";
+import { currentFindingContext } from "./vuln/annotate.mjs";
 import { threshold } from "./checks/thresholds.mjs";
 import { startScheduler } from "./scheduler.mjs";
 import { createPublicServer } from "./api/public.mjs";
@@ -144,7 +145,8 @@ export async function start({
   const cycleStaleMs = threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
   const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION, staleAfterMs: cycleStaleMs,
     vulnStaleAfterMs: threshold(config, "vulnsRefreshMinutes") * threshold(config, "staleFactor") * 60_000, maxFeedAgeMs: feedMaxAgeMs, now });
-  const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now });
+  const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now,
+    findingContext: (target) => currentFindingContext(target, { findings, store, holds, now: now(), maxFeedAgeMs: feedMaxAgeMs }) });
   log(`API listening on ${config.listen.apiHost}:${api.port}; admin on ${config.listen.adminHost}:${admin.port} (only from ${config.listen.adminAllowIp}).`);
 
   const scheduler = schedule ? startScheduler({
