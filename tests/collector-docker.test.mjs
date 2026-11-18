@@ -32,10 +32,17 @@ test("a host that is down is a warning", async () => {
   assert.equal(out.evidence.filter((e) => e.assetKey === "pve:guest:200").length, 0);
 });
 
-test("the image list is collected with repo digests; a malformed one fails the host", async () => {
+test("the image list is collected with repo digests; a malformed one is left out with a warning", async () => {
   const images = [{ Id: "sha256:abc", RepoTags: ["lscr.io/linuxserver/sonarr:4.0.9"], RepoDigests: ["lscr.io/linuxserver/sonarr@sha256:111"], Size: 1 }];
   const { out } = await run({ "/containers/json": CONTAINERS, "/images/json": images, "/version": { Version: "27.3.1", ApiVersion: "1.47" } });
   assert.deepEqual(out.evidence.find((e) => e.kind === "docker.images").value, [{ id: "sha256:abc", repoTags: ["lscr.io/linuxserver/sonarr:4.0.9"], repoDigests: ["lscr.io/linuxserver/sonarr@sha256:111"] }]);
   const bad = await run({ "/containers/json": CONTAINERS, "/images/json": { message: "nope" }, "/version": { Version: "27.3.1", ApiVersion: "1.47" } });
-  assert.ok(!bad.out.evidence.some((e) => e.assetKey === "pve:guest:109"));
+  assert.ok(bad.out.evidence.some((e) => e.assetKey === "pve:guest:109" && e.kind === "docker.containers"));
+  assert.ok(!bad.out.evidence.some((e) => e.kind === "docker.images"));
+});
+test("a failed image list doesn't lose the container list", async () => {
+  const { out } = await run({ "/containers/json": CONTAINERS, "/images/json": () => [403, { message: "forbidden" }], "/version": { Version: "27.3.1", ApiVersion: "1.47" } });
+  assert.ok(out.evidence.some((e) => e.assetKey === "pve:guest:109" && e.kind === "docker.containers"));
+  assert.ok(!out.evidence.some((e) => e.kind === "docker.images"));
+  assert.ok(out.warnings.some((w) => /image list/u.test(w)));
 });

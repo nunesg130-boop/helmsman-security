@@ -12,6 +12,7 @@ if (args[0] === "db" && args[1] === "update") {
 }
 if (args[0] === "db" && args[1] === "status") { process.stdout.write(JSON.stringify({ schemaVersion: "v6.1.0", built, valid: true, path: "/x" })); process.exit(0); }
 if (String(args[0]).startsWith("sbom:")) {
+  if (existsSync(`${home}/fake-grype-fail`)) { process.stderr.write("failed to catalog: unexpected end of JSON input\n"); process.exit(1); }
   const sbom = JSON.parse(readFileSync(args[0].slice(5), "utf8"));
   const out = args[args.indexOf("--file") + 1];
   writeFileSync(out, JSON.stringify({

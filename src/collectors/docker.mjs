@@ -1,5 +1,5 @@
 // Reads Docker through a read-only socket proxy on each Docker host (only GET
-// on containers/version is allowed there). The engine stores no Docker
+// on the container list, image list and version is allowed there). The engine stores no Docker
 // credential. A host that's down is a warning; its evidence ages to unknown.
 export async function collectDocker({ http, hosts, now = Date.now }) {
   const evidence = [];
@@ -9,8 +9,15 @@ export async function collectDocker({ http, hosts, now = Date.now }) {
     try {
       const list = await http.fetchJson(`${base}/containers/json?all=1`, { timeoutMs: 8000 });
       if (!Array.isArray(list)) throw Object.assign(new Error("container list is not a list"), { code: "parse" });
-      const images = await http.fetchJson(`${base}/images/json`, { timeoutMs: 8000 });
-      if (!Array.isArray(images)) throw Object.assign(new Error("image list is not a list"), { code: "parse" });
+      // The image list only feeds image scanning; failing to read it mustn't lose the containers.
+      let images = null;
+      try {
+        const got = await http.fetchJson(`${base}/images/json`, { timeoutMs: 8000 });
+        if (!Array.isArray(got)) throw Object.assign(new Error("not a list"), { code: "parse" });
+        images = got;
+      } catch (error) {
+        warnings.push(`docker host ${h.name} image list: ${error.code ?? "error"} ${error.message}`);
+      }
       const version = await http.fetchJson(`${base}/version`, { timeoutMs: 8000 });
       const t = now();
       evidence.push({
@@ -29,7 +36,7 @@ export async function collectDocker({ http, hosts, now = Date.now }) {
       // all=1 includes stopped containers and the endpoint isn't paged, so a
       // well-formed answer is the whole list.
       evidence.push({ assetKey: h.assetKey, kind: "docker.containers.meta", collectedAt: t, value: { complete: true, rows: list.length, all: true } });
-      evidence.push({ assetKey: h.assetKey, kind: "docker.images", collectedAt: t, value: images.map((i) => ({ id: i.Id ?? null, repoTags: i.RepoTags ?? [], repoDigests: i.RepoDigests ?? [] })) });
+      if (images) evidence.push({ assetKey: h.assetKey, kind: "docker.images", collectedAt: t, value: images.map((i) => ({ id: i.Id ?? null, repoTags: i.RepoTags ?? [], repoDigests: i.RepoDigests ?? [] })) });
       evidence.push({ assetKey: h.assetKey, kind: "docker.engine", collectedAt: t, value: { version: version?.Version ?? null, apiVersion: version?.ApiVersion ?? null } });
     } catch (error) {
       warnings.push(`docker host ${h.name}: ${error.code ?? "error"} ${error.message}`);

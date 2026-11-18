@@ -148,7 +148,9 @@ try {
           if (h.listing !== "ok") console.log(`${h.assetName} | - | - | container list ${h.listing} | - | -`);
           for (const i of h.images) {
             const status = i.status === "scanned" ? "scanned" : `${i.status.toUpperCase()}: ${i.reason}`;
-            console.log(`${h.assetName} | ${i.container} | ${i.imageRef} | ${status} | ${i.counts.total} (${i.counts.critical}/${i.counts.high}) | ${i.counts.kev ?? "unknown"}`);
+            const n = i.counts ? `${i.counts.total} (${i.counts.critical}/${i.counts.high})` : "-";
+            const kev = i.counts ? `${i.counts.kev ?? "unknown"}${i.counts.kevUnknown ? ` (+${i.counts.kevUnknown} unknown)` : ""}` : "-";
+            console.log(`${h.assetName} | ${i.container} | ${i.imageRef} | ${status} | ${n} | ${kev}`);
           }
         }
       }

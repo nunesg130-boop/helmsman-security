@@ -14,12 +14,15 @@ import { join } from "node:path";
 import { registryHosts } from "./identity.mjs";
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
-const REF = /^[a-z0-9.-]+(?::\d+)?(?:\/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$/u;
+// A registry must be a DNS name (with a dot and a letter): no IP literals,
+// no "localhost", no ports. Those would be reached outside the proxy.
+const REF = /^(?=[a-z0-9.-]*[a-z])[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$/u;
 const PLATFORM = /^[a-z0-9]+\/[a-z0-9]+$/u;
 const DB_HOSTS = ["grype.anchore.io"];
 const DAY = 86400_000;
 const FAILED_RETRY_MS = 6 * 3600_000;
 const RATE_LIMITED_RETRY_MS = 3600_000;
+const DB_RETRY_MS = 3600_000;
 const KEEP_UNREQUESTED_MS = 14 * DAY;
 
 export const fileId = (digest) => digest.replace(":", "-");
@@ -44,14 +47,13 @@ function classifyFailure(stderr) {
   return null;
 }
 
-export function createWorker({ binDir, stateDir, installed, path = "/usr/bin:/bin", now = Date.now, timeoutMs = 20 * 60_000, maxBytes = 256 * 1024 * 1024, dbCheckMs = DAY, log = console.log }) {
+export function createWorker({ binDir, stateDir, homeDir = join(stateDir, "home"), installed, path = "/usr/bin:/bin", now = Date.now, timeoutMs = 20 * 60_000, maxBytes = 256 * 1024 * 1024, dbCheckMs = DAY, log = console.log }) {
   const dir = { spool: join(stateDir, "spool"), out: join(stateDir, "out"), db: join(stateDir, "db"), tmp: join(stateDir, "tmp") };
   const bins = { grype: join(binDir, "grype"), syft: join(binDir, "syft") };
   let proxy = null;
   let proxyPort = 0;
   let allowed = new Set();
   let blocked = new Set();
-  const pulls = []; // times of Docker Hub pulls in the last hour
 
   function startProxy() {
     proxy = http.createServer((req, res) => { res.writeHead(403); res.end("only CONNECT is allowed"); });
@@ -75,17 +77,17 @@ export function createWorker({ binDir, stateDir, installed, path = "/usr/bin:/bi
     allowed = new Set(hosts);
     blocked = new Set();
     const env = {
-      PATH: path, HOME: stateDir, TMPDIR: dir.tmp,
+      PATH: path, HOME: homeDir, TMPDIR: dir.tmp,
       GRYPE_DB_CACHE_DIR: dir.db, GRYPE_DB_AUTO_UPDATE: "false", GRYPE_CHECK_FOR_APP_UPDATE: "false", SYFT_CHECK_FOR_APP_UPDATE: "false",
       HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`, HTTP_PROXY: `http://127.0.0.1:${proxyPort}`, NO_PROXY: ""
     };
     return new Promise((resolve) => {
-      const child = spawn(bins[name], args, { env, cwd: stateDir, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn(bins[name], args, { env, cwd: homeDir, stdio: ["ignore", "pipe", "pipe"] });
       let stdout = "", stderr = "", size = 0, tooLarge = false, timedOut = false;
       const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
       child.stdout.on("data", (d) => { size += d.length; if (size > maxBytes) { tooLarge = true; child.kill("SIGKILL"); } else stdout += d; });
       child.stderr.on("data", (d) => { stderr = (stderr + d).slice(-4096); });
-      child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr, timedOut, tooLarge, blocked: [...blocked] }); });
+      child.on("close", (code) => { clearTimeout(timer); allowed = new Set(); resolve({ code, stdout, stderr, timedOut, tooLarge, blocked: [...blocked] }); });
       child.on("error", (e) => { clearTimeout(timer); resolve({ code: -1, stdout: "", stderr: e.message, timedOut: false, tooLarge: false, blocked: [] }); });
     });
   }
@@ -100,6 +102,7 @@ export function createWorker({ binDir, stateDir, installed, path = "/usr/bin:/bi
   async function refreshDb() {
     const previous = readJson(join(dir.out, "db.json"));
     if (previous && previous.status === "ok" && now() - previous.checkedAt < dbCheckMs) return previous;
+    if (previous && previous.status === "failed" && now() - previous.checkedAt < DB_RETRY_MS) return previous;
     const base = { v: 1, grypeVersion: installed.grype.version, checkedAt: now() };
     const update = await run("grype", ["db", "update"], DB_HOSTS);
     if (update.code !== 0) {
@@ -139,61 +142,91 @@ export function createWorker({ binDir, stateDir, installed, path = "/usr/bin:/bi
     return Number.isFinite(n) && n > 0 ? n : 8;
   }
 
-  function writeScan(req, fields) {
+  // Docker Hub pulls in the last hour, kept on disk so a restart doesn't reset the cap.
+  function hubPulls() {
+    const list = readJson(join(dir.out, "hub-pulls.json"));
+    return (Array.isArray(list) ? list : []).filter((x) => Number.isFinite(x) && now() - x < 3600_000);
+  }
+
+  function writeScan(req, fields, previous = null) {
+    // A failed attempt keeps the last good result for this digest: same digest,
+    // same packages, so those findings still stand.
+    const lastGood = fields.status === "failed"
+      ? (previous?.status === "scanned" ? { dbBuilt: previous.dbBuilt, scannedAt: previous.scannedAt, matches: previous.matches } : previous?.lastGood ?? null)
+      : null;
     writeAtomic(dir.out, `scan-${fileId(req.digest)}.json`, JSON.stringify({
-      v: 1, digest: req.digest, ref: req.ref, grypeVersion: installed.grype.version, syftVersion: installed.syft.version, scannedAt: now(), matches: [], reason: null, detail: null, ...fields
+      v: 1, digest: req.digest, ref: req.ref, grypeVersion: installed.grype.version, syftVersion: installed.syft.version, scannedAt: now(), matches: [], reason: null, detail: null, lastGood, ...fields
     }));
   }
 
   async function scanOne(req, db) {
     const id = fileId(req.digest);
     const sbomPath = join(dir.out, `sbom-${id}.json`);
+    const attemptPath = join(dir.out, `attempt-${id}.json`);
     const previous = readJson(join(dir.out, `scan-${id}.json`));
+    const fail = (reason, detail) => writeScan(req, { status: "failed", reason, detail: detail || reason, dbBuilt: db.built }, previous);
+    // An attempt record left behind means the worker died mid-scan (out of memory, power cut).
+    if (existsSync(attemptPath)) { rmSync(attemptPath, { force: true }); fail("worker-stopped", "the scanner stopped during this image's scan"); return; }
     if (previous?.status === "scanned" && previous.dbBuilt === db.built && existsSync(sbomPath)) return;
-    if (previous?.status === "failed" && !existsSync(sbomPath)) {
+    if (previous?.status === "failed") {
       const wait = previous.reason === "rate-limited" ? RATE_LIMITED_RETRY_MS : FAILED_RETRY_MS;
       if (now() - previous.scannedAt < wait) return;
     }
+    const needsPull = !existsSync(sbomPath);
+    const hub = req.registry === "docker.io";
+    if (needsPull && hub && hubPulls().length >= hubCap()) return; // waits in the queue
+    writeAtomic(dir.out, `attempt-${id}.json`, JSON.stringify({ v: 1, startedAt: now() }));
+    try {
+      if (needsPull) {
+        if (hub) writeAtomic(dir.out, "hub-pulls.json", JSON.stringify([...hubPulls(), now()]));
+        const tmp = join(dir.tmp, `sbom-${id}.${randomBytes(4).toString("hex")}.json`);
+        const r = await run("syft", [`registry:${req.ref}`, "-o", `syft-json=${tmp}`, "--platform", req.platform], registryHosts(req.registry));
+        let reason = failure(r);
+        if (!reason && r.code === 0) {
+          if (!existsSync(tmp)) reason = "syft-error";
+          else if (statSync(tmp).size > maxBytes) reason = "too-large";
+        } else if (!reason) reason = "syft-error";
+        if (reason) { rmSync(tmp, { force: true }); fail(reason, r.stderr.slice(-4096)); return; }
+        const fd = openSync(tmp, "r+");
+        try { fsyncSync(fd); } finally { closeSync(fd); } // the SBOM must survive a power cut before it is trusted
+        renameSync(tmp, sbomPath);
+      }
 
-    if (!existsSync(sbomPath)) {
-      const hub = req.registry === "docker.io";
-      while (pulls.length && now() - pulls[0] > 3600_000) pulls.shift();
-      if (hub && pulls.length >= hubCap()) return; // waits in the queue
-      if (hub) pulls.push(now());
-      const tmp = join(dir.tmp, `sbom-${id}.${randomBytes(4).toString("hex")}.json`);
-      const r = await run("syft", [`registry:${req.ref}`, "-o", `syft-json=${tmp}`, "--platform", req.platform], registryHosts(req.registry));
-      let reason = failure(r);
-      if (!reason && r.code === 0) {
-        if (!existsSync(tmp)) reason = "syft-error";
-        else if (statSync(tmp).size > maxBytes) reason = "too-large";
-      } else if (!reason) reason = "syft-error";
-      if (reason) { rmSync(tmp, { force: true }); writeScan(req, { status: "failed", reason, detail: r.stderr.slice(-4096) || reason, dbBuilt: db.built }); return; }
-      renameSync(tmp, sbomPath);
+      const outTmp = join(dir.tmp, `grype-${id}.${randomBytes(4).toString("hex")}.json`);
+      const g = await run("grype", [`sbom:${sbomPath}`, "-o", "json", "--file", outTmp], []);
+      const reason = failure(g) ?? (g.code === 0 && existsSync(outTmp) ? null : "grype-error");
+      if (reason) {
+        rmSync(outTmp, { force: true });
+        if (reason === "grype-error") rmSync(sbomPath, { force: true }); // possibly a damaged SBOM: pull again after the back-off
+        fail(reason, g.stderr.slice(-4096));
+        return;
+      }
+      if (statSync(outTmp).size > maxBytes) { rmSync(outTmp, { force: true }); fail("too-large", "grype output over the size cap"); return; }
+      const parsed = readJson(outTmp);
+      rmSync(outTmp, { force: true });
+      if (!parsed || !Array.isArray(parsed.matches)) { fail("grype-error", "unreadable grype output"); return; }
+      const matches = parsed.matches.map((m) => {
+        const v = m.vulnerability ?? {};
+        const scoresOf = (list) => (list ?? []).map((c) => Number(c?.metrics?.baseScore)).filter(Number.isFinite);
+        // Distro records often carry no score of their own; the related NVD record does.
+        const own = scoresOf(v.cvss);
+        const related = (m.relatedVulnerabilities ?? []).flatMap((r) => scoresOf(r.cvss));
+        const scores = own.length ? own : related;
+        return {
+          id: String(v.id ?? ""),
+          relatedCves: [...new Set((m.relatedVulnerabilities ?? []).map((r) => String(r.id ?? "")).filter((x) => x.startsWith("CVE-")))],
+          severity: v.severity ?? null,
+          cvss: scores.length ? Math.max(...scores) : null,
+          fixState: v.fix?.state ?? "unknown",
+          fixVersions: Array.isArray(v.fix?.versions) ? v.fix.versions.map(String) : [],
+          pkg: { name: m.artifact?.name ?? null, version: m.artifact?.version ?? null, type: m.artifact?.type ?? null, purl: m.artifact?.purl ?? null },
+          matchType: m.matchDetails?.[0]?.type ?? null
+        };
+      });
+      writeScan(req, { status: "scanned", dbBuilt: db.built, matches });
+    } finally {
+      rmSync(attemptPath, { force: true });
     }
-
-    const outTmp = join(dir.tmp, `grype-${id}.${randomBytes(4).toString("hex")}.json`);
-    const g = await run("grype", [`sbom:${sbomPath}`, "-o", "json", "--file", outTmp], []);
-    const reason = failure(g) ?? (g.code === 0 && existsSync(outTmp) ? null : "grype-error");
-    if (reason) { rmSync(outTmp, { force: true }); writeScan(req, { status: "failed", reason, detail: g.stderr.slice(-4096) || reason, dbBuilt: db.built }); return; }
-    if (statSync(outTmp).size > maxBytes) { rmSync(outTmp, { force: true }); writeScan(req, { status: "failed", reason: "too-large", detail: "grype output over the size cap", dbBuilt: db.built }); return; }
-    const parsed = readJson(outTmp);
-    rmSync(outTmp, { force: true });
-    if (!parsed || !Array.isArray(parsed.matches)) { writeScan(req, { status: "failed", reason: "grype-error", detail: "unreadable grype output", dbBuilt: db.built }); return; }
-    const matches = parsed.matches.map((m) => {
-      const v = m.vulnerability ?? {};
-      const scores = (v.cvss ?? []).map((c) => Number(c?.metrics?.baseScore)).filter(Number.isFinite);
-      return {
-        id: String(v.id ?? ""),
-        relatedCves: [...new Set((m.relatedVulnerabilities ?? []).map((r) => String(r.id ?? "")).filter((x) => x.startsWith("CVE-")))],
-        severity: v.severity ?? null,
-        cvss: scores.length ? Math.max(...scores) : null,
-        fixState: v.fix?.state ?? "unknown",
-        fixVersions: Array.isArray(v.fix?.versions) ? v.fix.versions.map(String) : [],
-        pkg: { name: m.artifact?.name ?? null, version: m.artifact?.version ?? null, type: m.artifact?.type ?? null, purl: m.artifact?.purl ?? null },
-        matchType: m.matchDetails?.[0]?.type ?? null
-      };
-    });
-    writeScan(req, { status: "scanned", dbBuilt: db.built, matches });
   }
 
   // Results for digests nobody has asked about in two weeks are removed.

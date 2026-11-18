@@ -131,3 +131,61 @@ test("an image scan result over its age limit reads pending", async () => {
   await s.run();
   assert.deepEqual(s.byContainer()["authentik-server-1"], ["pending", "last scan is 8 days old (limit 7)"]);
 });
+
+// --- review fixes ---
+import { execFileSync } from "node:child_process";
+import { symlinkSync } from "node:fs";
+test("a failed rescan keeps filing the last good findings for that digest; coverage reads failed", async () => {
+  const s = setup({ scans: { [D(1)]: { status: "failed", reason: "grype-error", matches: [], lastGood: { dbBuilt: "2026-11-16T04:00:00Z", scannedAt: NOW - 86400_000, matches: [match()] } } } });
+  await s.run();
+  assert.equal(s.list().length, 2);
+  assert.deepEqual(s.byContainer()["authentik-server-1"], ["failed", "grype-error"]);
+  const entry = s.ev("grype.images").images.find((i) => i.container === "authentik-server-1");
+  assert.equal(entry.findings, 1, "counts come from the last good scan");
+});
+test("unscanned images have no finding count, not zero", async () => {
+  const s = setup();
+  await s.run();
+  assert.equal(s.ev("grype.images").images.find((i) => i.container === "hs-docker-proxy").findings, null);
+  assert.equal(s.ev("grype.images").images.find((i) => i.container === "palmetto-tech-site").findings, null);
+});
+test("result files that are links, pipes or oversized are refused without blocking", async () => {
+  const s = setup({ scans: { [D(1)]: {} } });
+  const target = join(s.outDir, `scan-${id(D(1))}.json`);
+  const real = join(s.root, "elsewhere.json");
+  writeFileSync(real, readFileSync(target));
+  execFileSync("rm", [target]);
+  symlinkSync(real, target);
+  execFileSync("mkfifo", [join(s.outDir, `scan-${id(D(2))}.json`)]);
+  const t0 = Date.now();
+  await s.run();
+  assert.ok(Date.now() - t0 < 5000, "a pipe must not block the engine");
+  assert.deepEqual(s.byContainer()["authentik-server-1"], ["failed", "unreadable result"]);
+  assert.deepEqual(s.byContainer()["hs-docker-proxy"], ["failed", "unreadable result"]);
+});
+test("matches that land on the same CVE and package are merged, keeping the worst case", async () => {
+  const s = setup({ scans: { [D(1)]: { matches: [
+    match("CVE-2026-1001", { severity: "Medium", cvss: 5, matchType: "cpe-match", fixState: "not-fixed" }),
+    match("CVE-2026-1001", { severity: "High", cvss: 7.5, matchType: "exact-direct-match", fixState: "fixed" })] } } });
+  await s.run();
+  const f = s.list().find((i) => i.container === "authentik-server-1");
+  assert.deepEqual([f.severity, f.cvss, f.lowConfidence, f.fixState], ["high", 7.5, false, "unknown"]);
+});
+test("a match the engine can't file makes the scan a failed read rather than quietly shorter", async () => {
+  const s = setup({ scans: { [D(1)]: { matches: [match(), { ...match(), pkg: { name: null } }] } } });
+  await s.run();
+  assert.deepEqual(s.byContainer()["authentik-server-1"], ["failed", "unreadable result"]);
+});
+test("a scanner reason outside the known list is shown generically", async () => {
+  const s = setup({ scans: { [D(1)]: { status: "failed", reason: "<script>alert(1)</script>", matches: [] } } });
+  await s.run();
+  assert.deepEqual(s.byContainer()["authentik-server-1"], ["failed", "scan failed"]);
+});
+test("a database dated in the future, or of an unknown format, is not trusted", async () => {
+  const future = setup({ db: { v: 1, status: "ok", built: "2027-01-01T00:00:00Z", checkedAt: NOW }, scans: { [D(1)]: { dbBuilt: "2027-01-01T00:00:00Z" } } });
+  await future.run();
+  assert.equal(future.byContainer()["authentik-server-1"][0], "unknown");
+  const wrong = setup({ db: { v: 9, status: "ok", built: BUILT }, scans: { [D(1)]: {} } });
+  await wrong.run();
+  assert.equal(wrong.byContainer()["authentik-server-1"][0], "unknown");
+});

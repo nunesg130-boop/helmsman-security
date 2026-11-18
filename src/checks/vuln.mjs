@@ -21,14 +21,15 @@ export const vulnCoverageHost = {
 // on this machine been scanned, against a current database? Any image that
 // wasn't is named with its reason. A machine with Docker but no read-only
 // gate can't have its images listed at all, so it is unknown too.
-const RUNTIMES = new Set(["docker-ce", "docker.io", "containerd", "containerd.io", "podman"]);
+const RUNTIMES = new Set(["docker-ce", "docker.io", "docker", "moby-engine", "containerd", "containerd.io", "podman"]);
 const imageKey = (i) => i.repo ?? String(i.imageRef ?? "").split(":")[0];
 
 export const vulnCoverageImages = {
   id: "vuln_coverage_images",
   title: "Container image scan coverage",
   requires: (asset) => (asset.sources?.docker ? ["grype.images", "grype.db"] : ["wazuh.packages"]),
-  appliesTo: (asset, config) => Boolean(config?.images?.enabled) && HOST_CLASSES.includes(asset.class) && Boolean(asset.sources?.docker || asset.sources?.wazuh?.id),
+  // Every machine: one without an agent can't be shown to be free of Docker.
+  appliesTo: (asset, config) => Boolean(config?.images?.enabled) && HOST_CLASSES.includes(asset.class),
   notApplicableReason: (asset, config) => (config?.images?.enabled ? "no Docker on this machine" : "container image scanning not configured"),
   evaluate(inputs, { asset, holds, now }) {
     if (!asset.sources?.docker) {

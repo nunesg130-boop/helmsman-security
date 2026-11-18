@@ -39,6 +39,11 @@ export function runningImages(containers, images) {
     if (!matching.length) { out.push({ ...base, status: "unknown", reason: "no registry digest matches the container's image name" }); continue; }
     const pick = matching[0];
     if (!DIGEST.test(pick.digest)) { out.push({ ...base, status: "unknown", reason: "malformed registry digest" }); continue; }
+    // A registry by IP address, port or localhost would be reached around the scanner's proxy.
+    if (pick.registry.includes(":") || pick.registry === "localhost" || /^[0-9.]+$/u.test(pick.registry) || !/[a-z]/u.test(pick.registry)) {
+      out.push({ ...base, status: "unknown", reason: "registry given by address or port; not scanned" });
+      continue;
+    }
     out.push({ ...base, status: "registry", registry: pick.registry, repo: pick.repo, digest: pick.digest });
   }
   return out;
@@ -46,7 +51,7 @@ export function runningImages(containers, images) {
 
 // Hosts a pull from this registry may need to contact.
 export function registryHosts(registry) {
-  if (registry === "docker.io") return ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"];
+  if (registry === "docker.io") return ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com", "docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com"];
   if (registry === "ghcr.io") return ["ghcr.io", "pkg-containers.githubusercontent.com"];
   if (registry === "lscr.io") return ["lscr.io", "ghcr.io", "pkg-containers.githubusercontent.com"];
   return [String(registry).split(":")[0]];

@@ -139,7 +139,7 @@ test("a confirmed finding with only heuristic exposure is never suppressed; stal
 // --- container findings (phase 2C) ---
 const cf = (container, name = "openssl") => ({ container, pkg: { name, version: "1" } });
 const docker = (services) => ({ exposure: "internet", role: "app", services: services.map((_, i) => i) });
-const vault = (extra = {}) => svc({ hostname: "vault.jellofin.com", upstream: "192.168.0.109:80", assetKey: "pve:guest:109", process: null, container: "aliasvault", gate: "none", ...extra });
+const vault = (extra = {}) => svc({ hostname: "vault.jellofin.com", upstream: "192.168.0.109:80", assetKey: "pve:guest:109", process: null, container: "aliasvault", listening: true, gate: "none", ...extra });
 
 test("urgency rules are version 2", () => assert.equal(URGENCY_RULES, 2));
 test("a finding in the container a public route lands on is confirmed service-exposed", () => {
@@ -158,10 +158,21 @@ test("with two routes to one container the weakest gate decides", () => {
   const services = [vault({ gate: "authentik" }), vault({ hostname: "open.jellofin.com", gate: "none" })];
   assert.deepEqual([findingExposure(cf("aliasvault"), docker(services), services).exposure, findingExposure(cf("aliasvault"), docker(services), services).via], ["service", "open.jellofin.com"]);
 });
-test("a container no route lands on is host-exposed, and container findings never get a heuristic guess", () => {
+test("a container no route lands on is host-exposed when every public route on the machine is attributed to a container", () => {
   const services = [vault()];
   assert.deepEqual(findingExposure(cf("paperless-db-1", "aliasvault"), docker(services), services), { exposure: "host", basis: "route", possible: null, gate: null, via: null });
-  assert.equal(findingExposure(cf("paperless-db-1", "openssl"), docker([svc({ process: "openssl", container: null })]), [svc({ process: "openssl", container: null })]).possible, null);
+});
+test("a public route the engine can't tie to a container makes every container on that machine possibly service-exposed", () => {
+  // host networking, a proxy container in front, or a listener the engine can't see
+  for (const s of [svc({ process: "jellyfin", container: null, listening: true }), svc({ process: null, container: null, listening: null }), vault({ listening: null })]) {
+    const services = [s];
+    const e = findingExposure(cf("jellyfin"), docker(services), services);
+    assert.deepEqual([e.exposure, e.possible], ["host", "service"], JSON.stringify(s));
+    const u = urgency({ exposure: e.exposure, possible: e.possible, kev: false, severity: "high", fixState: FIX });
+    assert.deepEqual([u.urgent, u.possiblyUrgent], [false, true]);
+  }
+  const gated = [svc({ container: null, gate: "authentik" })];
+  assert.equal(findingExposure(cf("x"), docker(gated), gated).possible, "gated");
 });
 test("a lan-only route to the container doesn't make it exposed", () => {
   const services = [vault({ exposure: "lan" })];

@@ -152,18 +152,19 @@ export class FindingStore {
 // Finding counts per (asset, container) for container images.
 export function imageCounts(db, tenantId, { kevFresh }) {
   const rows = db.prepare(
-    `SELECT f.asset_key, f.container, f.severity, (k.cve IS NOT NULL) AS is_kev, COUNT(*) AS n
+    `SELECT f.asset_key, f.container, f.severity, (k.cve IS NOT NULL) AS is_kev, (f.cve LIKE 'CVE-%') AS has_cve, COUNT(*) AS n
      FROM findings f LEFT JOIN kev k ON k.tenant_id = f.tenant_id AND k.cve = f.cve
-     WHERE f.tenant_id = ? AND f.source = 'grype' GROUP BY f.asset_key, f.container, f.severity, is_kev`
+     WHERE f.tenant_id = ? AND f.source = 'grype' GROUP BY f.asset_key, f.container, f.severity, is_kev, has_cve`
   ).all(tenantId);
   const out = new Map();
   for (const r of rows) {
     const key = `${r.asset_key}\u0000${r.container}`;
-    if (!out.has(key)) out.set(key, { total: 0, critical: 0, high: 0, kev: kevFresh ? 0 : null });
+    if (!out.has(key)) out.set(key, { total: 0, critical: 0, high: 0, kev: kevFresh ? 0 : null, kevUnknown: 0 });
     const c = out.get(key);
     c.total += r.n;
     if (r.severity === "critical" || r.severity === "high") c[r.severity] += r.n;
-    if (kevFresh && r.is_kev) c.kev += r.n;
+    if (!r.has_cve) c.kevUnknown += r.n; // no CVE id: the KEV list can't say
+    else if (kevFresh && r.is_kev) c.kev += r.n;
   }
-  return (assetKey, container) => out.get(`${assetKey}\u0000${container}`) ?? { total: 0, critical: 0, high: 0, kev: kevFresh ? 0 : null };
+  return (assetKey, container) => out.get(`${assetKey}\u0000${container}`) ?? { total: 0, critical: 0, high: 0, kev: kevFresh ? 0 : null, kevUnknown: 0 };
 }

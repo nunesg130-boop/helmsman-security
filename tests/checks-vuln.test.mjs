@@ -112,3 +112,8 @@ test("a machine with Docker installed but no read-only gate is unknown; one with
   assert.deepEqual([kasm.state, kasm.reason], ["unknown", "Docker is installed but has no read-only gate; its images can't be listed"]);
   assert.equal(irun(istore({ packages: ["bash"] }), plainHost).state, "not_applicable");
 });
+test("a machine without an agent can't be ruled Docker-free: unknown, not 'no Docker'", () => {
+  const r = irun(istore(), { assetKey: "pve:guest:102", class: "guest", name: "haos", sources: {} });
+  assert.deepEqual([r.state, r.reason], ["unknown", "no Wazuh agent installed"]);
+  assert.equal(irun(istore({ packages: ["moby-engine"] }), plainHost).state, "unknown", "Fedora's Docker package");
+});

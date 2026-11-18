@@ -47,9 +47,16 @@ test("a malformed digest is unknown, never trusted", () => {
   assert.equal(out[0].status, "unknown");
 });
 test("registry hosts a pull may contact", () => {
-  assert.deepEqual(registryHosts("docker.io"), ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"]);
+  assert.deepEqual(registryHosts("docker.io").slice(0, 3), ["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"]);
   assert.deepEqual(registryHosts("ghcr.io"), ["ghcr.io", "pkg-containers.githubusercontent.com"]);
   assert.deepEqual(registryHosts("lscr.io"), ["lscr.io", "ghcr.io", "pkg-containers.githubusercontent.com"]);
   assert.deepEqual(registryHosts("quay.io"), ["quay.io"]);
-  assert.deepEqual(registryHosts("localhost:5000"), ["localhost"]);
+});
+test("registries given by IP address, port or localhost are not scanned", () => {
+  const out = runningImages([c("a", "127.0.0.1:5000/x:1", "sha256:a"), c("b", "registry.lan:5000/y:1", "sha256:b")],
+    [img("sha256:a", ["127.0.0.1:5000/x:1"], [`127.0.0.1:5000/x@${D(1)}`]), img("sha256:b", ["registry.lan:5000/y:1"], [`registry.lan:5000/y@${D(2)}`])]);
+  assert.deepEqual(out.map((r) => [r.status, r.reason]), [["unknown", "registry given by address or port; not scanned"], ["unknown", "registry given by address or port; not scanned"]]);
+});
+test("Docker Hub pulls may use its Cloudflare R2 layer storage", () => {
+  assert.ok(registryHosts("docker.io").includes("docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com"));
 });

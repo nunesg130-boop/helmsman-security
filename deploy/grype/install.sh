@@ -11,6 +11,7 @@ STATE=/var/lib/hs-grype
 ENGINE_GROUP=helmsec
 
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
+command -v curl >/dev/null || { echo "curl is needed: apt-get install -y curl"; exit 1; }
 getent group "$ENGINE_GROUP" >/dev/null || { echo "group $ENGINE_GROUP not found (is the engine installed?)"; exit 1; }
 
 field() { node -e 'const v=JSON.parse(require("fs").readFileSync(process.argv[1]));process.stdout.write(String(v[process.argv[2]][process.argv[3]]))' "$VERSIONS" "$1" "$2"; }
@@ -38,11 +39,21 @@ const rec={grype:{version:v.grype.version,sha256:h(process.argv[2]+"/bin/grype")
 fs.writeFileSync(process.argv[2]+"/installed.json",JSON.stringify(rec,null,2)+"\n")' "$VERSIONS" "$LIB"
 chmod 0644 "$LIB/installed.json"
 
-id hs-grype >/dev/null 2>&1 || useradd --system --home-dir "$STATE" --no-create-home --shell /usr/sbin/nologin hs-grype
-install -d -m 0750 -o hs-grype -g "$ENGINE_GROUP" "$STATE"
-install -d -m 2770 -o hs-grype -g "$ENGINE_GROUP" "$STATE/spool"
-install -d -m 2750 -o hs-grype -g "$ENGINE_GROUP" "$STATE/out"
-install -d -m 0700 -o hs-grype -g hs-grype "$STATE/db" "$STATE/tmp"
+# Folder layout. $STATE itself is root-owned, so the scanner user can't swap
+# its subfolders for links; and nothing is created or changed through a link
+# (install -d follows them, and this runs as root).
+refuse_link() { if [ -L "$1" ]; then echo "REFUSING: $1 is a symbolic link (possible tampering). Remove it and run again."; exit 1; fi; }
+refuse_link "$STATE"
+refuse_link "$STATE/spool"
+refuse_link "$STATE/out"
+refuse_link "$STATE/db"
+refuse_link "$STATE/tmp"
+refuse_link "$STATE/home"
+id hs-grype >/dev/null 2>&1 || useradd --system --home-dir "$STATE/home" --no-create-home --shell /usr/sbin/nologin hs-grype
+install -d -m 0755 -o root -g "$ENGINE_GROUP" "$STATE"
+install -d -m 2775 -o root -g "$ENGINE_GROUP" "$STATE/spool"   # requests: the engine writes, the scanner only reads
+install -d -m 2750 -o hs-grype -g "$ENGINE_GROUP" "$STATE/out" # results: the scanner writes, the engine reads
+install -d -m 0700 -o hs-grype -g hs-grype "$STATE/db" "$STATE/tmp" "$STATE/home"
 
 install -m 0644 -o root -g root "$HERE/hs-grype.service" /etc/systemd/system/hs-grype.service
 systemctl daemon-reload
@@ -50,4 +61,5 @@ systemctl daemon-reload
 echo "--- isolation check (both lines should say 'refused') ---"
 if runuser -u hs-grype -- ls /var/lib/helmsman-security >/dev/null 2>&1; then echo "engine data: READABLE by hs-grype -- fix permissions before starting"; else echo "engine data: refused"; fi
 if runuser -u hs-grype -- ls /etc/helmsman-security >/dev/null 2>&1; then echo "engine config: READABLE by hs-grype -- fix permissions before starting"; else echo "engine config: refused"; fi
+if runuser -u hs-grype -- test -r /opt/helmsman-security/src/images/worker-main.mjs; then echo "worker code: readable"; else echo "worker code: NOT readable by hs-grype -- run: chmod -R o+rX /opt/helmsman-security"; fi
 echo "installed. Start with: systemctl enable --now hs-grype"

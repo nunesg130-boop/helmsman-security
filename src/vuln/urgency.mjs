@@ -28,8 +28,16 @@ export function findingExposure(finding, machine, services = []) {
   // A container finding: the route's own listener evidence names the
   // container, so its exposure is confirmed, not guessed.
   if (finding?.container) {
-    const hits = (machine.services ?? []).map((i) => services[i]).filter((s) => s && s.exposure !== "lan" && s.container === finding.container);
-    if (!hits.length) return out("host", "route");
+    const publicServices = (machine.services ?? []).map((i) => services[i]).filter((s) => s && s.exposure !== "lan");
+    const hits = publicServices.filter((s) => s.container === finding.container);
+    if (!hits.length) {
+      // A public route the engine couldn't tie to a container (host networking,
+      // a proxy container in front, a listener it can't see) could be any of them.
+      const untied = publicServices.filter((s) => !s.container || s.listening !== true);
+      if (!untied.length) return out("host", "route");
+      const w = untied.reduce((a, b) => ((GATE_WEAKNESS[b.gate] ?? 0) > (GATE_WEAKNESS[a.gate] ?? 0) ? b : a));
+      return out("host", "route", { possible: VERIFIED.has(w.gate) ? "gated" : "service", gate: w.gate, via: w.hostname });
+    }
     const weakest = hits.reduce((a, b) => ((GATE_WEAKNESS[b.gate] ?? 0) > (GATE_WEAKNESS[a.gate] ?? 0) ? b : a));
     return out(VERIFIED.has(weakest.gate) ? "gated" : "service", "route", { gate: weakest.gate, via: weakest.hostname });
   }

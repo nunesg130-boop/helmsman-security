@@ -45,14 +45,18 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
     const last = run?.lastSuccessAt ?? null;
     const t = now();
     const fresh = findings.freshness({ now: t, maxFeedAgeMs });
-    return {
+    const out = {
       collection: { status: run?.status ?? "never_run", lastSuccessAt: last, lastError: run?.status === "failed" ? run.error : null },
+      // Image findings are only as current as the last image run.
+      images: imagesConfigured ? (() => { const ir = store.lastRun(IMAGES_COLLECTOR); const il = ir?.lastSuccessAt ?? null; return { status: ir?.status ?? "never_run", lastSuccessAt: il, stale: il == null || t - il > vulnStaleAfterMs || il > t + 60_000 || ir.status === "failed" }; })() : null,
       findingsStale: last == null || t - last > vulnStaleAfterMs || last > t + 60_000 || run.status === "failed",
       feeds: { kev: findings.feed("kev"), epss: findings.feed("epss") },
       kevStale: !fresh.kev,
       epssStale: !fresh.epss,
       threatDataStale: !(fresh.kev && fresh.epss)
     };
+    if (out.images?.stale) out.findingsStale = true;
+    return out;
   }
   const assetNames = () => new Map(db.prepare("SELECT asset_key, name FROM assets WHERE tenant_id = ?").all(tenantId).map((a) => [a.asset_key, a.name]));
   const intParam = (url, name, fallback, max) => {
@@ -138,6 +142,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       // list here would read as "nothing urgent".
       if (urgent === "true" && exposure.status !== "ok") return [409, { error: `the exposure map is ${exposure.status}${exposure.detail ? ` (${exposure.detail})` : ""}, so urgency can't be established`, exposureStatus: exposure.status, ...meta }];
       // Without a current KEV list, findings that may be urgent can't be confirmed either way.
+      if (urgent === "true" && (meta.findingsStale || meta.images?.stale)) return [409, { error: "vulnerability findings are out of date, so the urgent list would be incomplete", exposureStatus: exposure.status, ...meta }];
       if (urgent === "true" && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so the urgent list would be incomplete", exposureStatus: exposure.status, ...meta }];
       const limit = Math.max(1, intParam(url, "limit", 50, 200));
       const offset = intParam(url, "offset", 0, Number.MAX_SAFE_INTEGER);
@@ -193,7 +198,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       const hosts = db.prepare("SELECT asset_key, name FROM assets WHERE tenant_id = ? ORDER BY name").all(tenantId).map((a) => ({ a, ev: store.get(a.asset_key, "grype.images") })).filter(({ ev }) => ev)
         .map(({ a, ev }) => ({
           assetKey: a.asset_key, assetName: a.name, listing: fresh(ev) ? ev.value.listing : "stale", collectedAt: ev.collectedAt,
-          images: ev.value.images.map((i) => ({ ...i, counts: counts(a.asset_key, i.container) }))
+          images: ev.value.images.map((i) => ({ ...i, counts: i.findings === null || i.findings === undefined ? null : counts(a.asset_key, i.container) }))
         }));
       return [200, { configured: imagesConfigured, collection, db: { ...dbEv.value, stale: dbEv.value.stale || !fresh(dbEv), collectedAt: dbEv.collectedAt }, hosts }];
     },

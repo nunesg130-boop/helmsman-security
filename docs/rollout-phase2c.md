@@ -109,4 +109,6 @@ Images move from `PENDING: not scanned yet` to `scanned`. A failed image shows i
 - Only images used by **running** containers are scanned.
 - A finding with only a GitHub advisory id (no CVE number) shows KEV status **unknown**, because the KEV list names CVEs only.
 - The scanner reads the amd64 variant of each image (`images.platform`).
-- After a restart of the scanner service, its Docker Hub hourly count starts again from zero.
+- The network allowlist is enforced by a proxy that Grype and Syft are told to use. That holds for the real, checksum-verified tools. A tampered tool could ignore the proxy and connect directly. The service's own sandbox (no capabilities, no access to the engine's files) still applies.
+- Images from a registry given by IP address, port or `localhost` are not scanned. They show as unknown with that reason.
+- Re-running `install.sh` (for example to move to a newer pinned version) is safe. It refuses to continue if any of its folders has been replaced by a link.
