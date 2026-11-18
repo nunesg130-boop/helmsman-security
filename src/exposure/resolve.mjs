@@ -96,7 +96,10 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
   const byIp = new Map();
   for (const a of assets) for (const ip of a.ips ?? []) byIp.set(ip, [...(byIp.get(ip) ?? []), a.assetKey]);
   const apps = cfOk ? cloudflare.apps : undefined;
-  const rules = cfOk ? (cloudflare.tunnels ?? []).flatMap((t) => t.ingress ?? []).map((r) => ({ ...r, target: parseService(r.service, cfg.connectorAddress) })) : [];
+  // The machine running a tunnel's cloudflared: its own address if configured, else the default.
+  const connectorFor = (tunnelId) => config?.cloudflare?.connectors?.[tunnelId] ?? cfg.connectorAddress;
+  const rules = cfOk ? (cloudflare.tunnels ?? []).flatMap((t) => (t.ingress ?? []).map((r) => ({ ...r, connector: connectorFor(t.id) })))
+    .map((r) => ({ ...r, target: parseService(r.service, r.connector) })) : [];
   const toCaddy = rules.filter((r) => r.target.kind === "url" && r.target.host === caddyAddr);
   // A rule whose target is a name (or unreadable) might be Caddy too.
   const maybeCaddy = rules.filter((r) => r.target.kind === "unknown" || (r.target.kind === "url" && parseV4(r.target.host) == null));
@@ -130,7 +133,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
       const name = e.hostname !== "*" && !e.hostname.includes("*") ? e.hostname : r.hostname;
       const access = accessGate(name, accessPath(e.path));
       const gate = access === "cloudflare-access" ? access : e.gate === "authentik" ? "authentik" : access === "unknown" || e.gate === "unknown" ? "unknown" : "none";
-      const evaluated = evalRestriction(e.restriction, { remoteIp: cfg.connectorAddress, clientIp: clientIpFor("tunnel-via-caddy", e.clientIp, cfg) });
+      const evaluated = evalRestriction(e.restriction, { remoteIp: r.connector, clientIp: clientIpFor("tunnel-via-caddy", e.clientIp, { ...cfg, connectorAddress: r.connector }) });
       const reachable = listening === true ? evaluated : evaluated === false ? false : "unknown";
       viaTunnel.push(r);
       const why = maybe ? `tunnel rule to ${r.service} may lead into Caddy` : e.gate === "unknown" ? e.gateReason : "Cloudflare Access policy can't be verified";
@@ -157,7 +160,7 @@ export function resolveExposure({ caddy, cloudflare, router, assets = [], listen
     const path = { entry: "tunnel-direct", reachable: true, gate, gateReason: gate === "unknown" ? "Cloudflare Access policy can't be verified" : null };
     const same = drafts.filter((d) => d.entry && d.hostname === hostname && d.upstream === upstream);
     if (same.length) for (const d of same) { d.paths.push(path); d.tunnelRules.push(r); }
-    else drafts.push({ entry: null, hostname, path: r.path ?? null, paths: [path], tunnelRules: [r], upstream, loopbackOwner: cfg.connectorAddress });
+    else drafts.push({ entry: null, hostname, path: r.path ?? null, paths: [path], tunnelRules: [r], upstream, loopbackOwner: r.connector });
   }
 
   // 3. Finish each service: exposure, effective gate, machine, listener.

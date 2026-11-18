@@ -120,3 +120,11 @@ test("egress adds the Caddy host (http) and Cloudflare's API only when configure
   const caddyOnly = egressHosts(parseConfig({ ...minimal, exposure: { caddy: EXPO.caddy } }));
   assert.ok(!caddyOnly.allowHosts.includes("api.cloudflare.com"));
 });
+test("exposure.cloudflare.connectors maps listed tunnels to IPv4 addresses", async () => {
+  const { parseConfig: parse } = await import("../src/config.mjs");
+  const base = { listen: { adminAllowIp: "192.168.0.105" }, owner: { authentikUser: "o" } };
+  const cf = { accountId: "a", zoneId: "z", assetKey: "pve:guest:151", connectorAddress: "192.168.0.151", tunnelIds: ["t1", "t2"] };
+  assert.deepEqual(parse({ ...base, exposure: { cloudflare: { ...cf, connectors: { t2: "192.168.0.197" } } } }).exposure.cloudflare.connectors, { t2: "192.168.0.197" });
+  assert.throws(() => parse({ ...base, exposure: { cloudflare: { ...cf, connectors: { t2: "nope" } } } }), /connectors/u);
+  assert.throws(() => parse({ ...base, exposure: { cloudflare: { ...cf, connectors: { t9: "192.168.0.9" } } } }), /connectors/u);
+});
