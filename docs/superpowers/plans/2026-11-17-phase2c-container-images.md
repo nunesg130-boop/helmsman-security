@@ -6,7 +6,7 @@
 
 **Architecture:** A separate scanner worker (`hs-grype`) runs under its own system user and talks to the engine only through a spool directory. The engine writes a scan request per image digest. The worker pulls the image once with Syft into an SBOM (software bill of materials) and runs Grype on the stored SBOM. It re-runs Grype on that SBOM whenever the vulnerability database changes, without pulling again. It writes results atomically. The engine reads results in its own collector run, files findings under the Docker host with the container name, and joins them with 2B's exposure map. A route that lands on a container publishing that port gives its image **confirmed** service exposure, not the process-name heuristic.
 
-**Tech Stack:** Node.js 24 (ESM), `node:sqlite`, `node --test`, no npm dependencies. On helmsec: Grype v0.122.0 and Syft (pinned at Task 3), systemd.
+**Tech Stack:** Node.js 24 (ESM), `node:sqlite`, `node --test`, no npm dependencies. On helmsec: Grype v0.122.0 and Syft v1.57.2 (pinned), systemd.
 
 **Spec:** `docs/superpowers/specs/2026-11-15-security-phase2-design.md` section 4.3 (and 4.5–4.8 for exposure, urgency, score). Plan 3 of 3 for phase 2.
 
@@ -30,6 +30,7 @@
 - authentik-server and authentik-worker share one image; findings are filed per container.
 - Kasm (VM 151) runs Docker (bridge addresses 172.17–19.x) but has no read-only gate, so its images can't be listed. That surfaces as unknown coverage, never as "no containers".
 - Grype latest release v0.122.0 (2026-11-16). GitHub's asset digest for `grype_0.122.0_linux_amd64.tar.gz` is `sha256:e697e6f7224637df87e267e4318cc027feae99a8e1b80280241d32b9ee5d4920`.
+- Syft latest release v1.57.2 (read by the owner on helmsec 2026-11-17). GitHub's asset digest for `syft_1.57.2_linux_amd64.tar.gz` is `sha256:ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b`.
 
 ## Spool protocol (engine ⇄ worker)
 
@@ -57,7 +58,7 @@ All files are JSON and written atomically (temp file in the same directory, `fsy
 
 **Interfaces:**
 - `config.images = { enabled: boolean, spoolDir: "/var/lib/hs-grype/spool", outDir: "/var/lib/hs-grype/out", platform: "linux/amd64", dbMaxAgeDays: 5, resultMaxAgeDays: 7, dockerHubPullsPerHour: 8 } | null`. Defaults apply when `images: { enabled: true }`. Paths must be absolute.
-- `deploy/grype/versions.json = { grype: { version: "0.122.0", url, sha256 }, syft: { version, url, sha256 } }`. The Syft entry is filled in Task 3, Step 1.
+- `deploy/grype/versions.json = { grype: { version: "0.122.0", url, sha256 }, syft: { version, url, sha256 } }`. Both entries are known: Grype 0.122.0 and Syft 1.57.2 with the digests above.
 - Migration v4: rebuild `findings` with two new columns, `container TEXT NOT NULL DEFAULT ''` and `image TEXT`, and `container` added to the primary key, keeping every row (as v3 did for `holds`). New table `image_scans (tenant_id, digest, status, reason, db_built, scanned_at, read_at, PRIMARY KEY (tenant_id, digest))`.
 
 - [ ] **Step 1:** Write the failing tests: defaults are applied; relative paths and a non-positive `dbMaxAgeDays` are rejected; a v3 database migrates to v4 keeping its findings with `container = ''`; two rows that differ only by container can coexist.
@@ -109,7 +110,7 @@ All files are JSON and written atomically (temp file in the same directory, `fsy
 - The CONNECT proxy listens on 127.0.0.1 only. It allows a host only if it's in `registryHosts()` of a currently queued request, or is the Grype database host (`grype.anchore.io` and the host its `latest.json` points to, read at update time). It refuses anything else with 403 and records `blocked-host <host>` on the scan that asked.
 - systemd unit: `User=hs-grype`, `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/hs-grype`, `InaccessiblePaths=/var/lib/helmsman-security /etc/helmsman-security`, `MemoryMax=1536M`, `Nice=10`, `Restart=on-failure`. There's a fallback note for LXCs without namespacing, as in 2B.
 
-- [ ] **Step 1:** Ask the owner to read Syft's latest release (`curl -s https://api.github.com/repos/anchore/syft/releases/latest`) and fill `versions.json` with that version and the `linux_amd64.tar.gz` asset digest. Commit.
+- [x] **Step 1:** Syft version read by the owner: v1.57.2 (digest in Facts).
 - [ ] **Step 2:** Write failing tests with the fake binaries:
   - A request produces an SBOM and then a scan result, both written atomically (no partial file is ever visible under the final name).
   - A second request for the same digest doesn't run Syft again.
