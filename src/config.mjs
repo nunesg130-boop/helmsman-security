@@ -96,6 +96,11 @@ export function parseConfig(raw) {
       need(isStr(cf.accountId) && isStr(cf.zoneId) && isStr(cf.assetKey), "exposure.cloudflare needs accountId, zoneId and assetKey");
       need(Array.isArray(cf.tunnelIds) && cf.tunnelIds.length > 0 && cf.tunnelIds.every(isStr), "exposure.cloudflare.tunnelIds must be a non-empty list");
       need(isV4(cf.connectorAddress), "exposure.cloudflare.connectorAddress must be cloudflared's IPv4 address");
+      // Each tunnel's cloudflared may run on its own machine; "localhost" in its routes means that machine.
+      if (cf.connectors != null) {
+        need(typeof cf.connectors === "object" && !Array.isArray(cf.connectors) && Object.entries(cf.connectors).every(([id, ip]) => cf.tunnelIds.includes(id) && isV4(ip)),
+          "exposure.cloudflare.connectors must map tunnel ids from tunnelIds to IPv4 addresses");
+      }
     }
     e.expectedPrivate = e.expectedPrivate ?? [];
     need(Array.isArray(e.expectedPrivate) && e.expectedPrivate.every(isStr), "exposure.expectedPrivate must be a list of hostnames");

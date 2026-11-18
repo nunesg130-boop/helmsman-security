@@ -277,3 +277,22 @@ test("an out-of-date machine inventory means nothing can be called lan", () => {
   assert.match(out.machines.get("pve:guest:110").reason, /machine inventory is stale/u);
   assert.equal(out.sources.inventory, "stale");
 });
+
+test("each tunnel's localhost belongs to the machine that runs that tunnel's cloudflared", () => {
+  const tunnels = [
+    { id: "kasm", ingress: [ingress("manage.jellofin.com", "https://localhost:443"), ingress(null, "http_status:404")] },
+    { id: "ha", ingress: [ingress("haos.jellofin.com", "http://localhost:8123"), ingress(null, "http_status:404")] }
+  ];
+  const assets = [...ASSETS, { assetKey: "pve:guest:151", name: "Kasm", ips: ["192.168.0.151"] }, { assetKey: "pve:guest:102", name: "haos", ips: ["192.168.0.197"] }];
+  const config = { ...CONFIG, cloudflare: { ...CONFIG.cloudflare, connectors: { kasm: "192.168.0.151", ha: "192.168.0.197" } } };
+  const out = resolveExposure({ caddy: { status: "ok", shape: live }, cloudflare: cf({ tunnels }), router: ROUTER, assets, config });
+  const svc = (h) => out.services.find((s) => s.hostname === h);
+  assert.equal(svc("manage.jellofin.com").assetKey, "pve:guest:151");
+  assert.equal(svc("haos.jellofin.com").assetKey, "pve:guest:102");
+  assert.deepEqual([out.machines.get("pve:guest:151").exposure, out.machines.get("pve:guest:102").exposure], ["internet", "internet"]);
+});
+test("a tunnel without its own connector address falls back to the default one", () => {
+  const config = { ...CONFIG, cloudflare: { ...CONFIG.cloudflare, connectors: { other: "192.168.0.2" } } };
+  const out = resolveExposure({ caddy: { status: "ok", shape: live }, cloudflare: cf({ tunnels: tunnel(ingress("x.jellofin.com", "http://localhost:80")) }), router: ROUTER, assets: ASSETS, config });
+  assert.equal(out.services.find((s) => s.hostname === "x.jellofin.com").assetKey, "pve:guest:108");
+});
