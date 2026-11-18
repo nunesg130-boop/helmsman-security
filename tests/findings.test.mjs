@@ -101,3 +101,11 @@ test("a failed replaceEpss (bad row) leaves the previous table intact", () => {
   s.replaceKev(kevRows(1), 1000);
   assert.equal(s.list({}, AGE).items[0].epss, 0.42);
 });
+test("a finding with no CVE id has KEV status unknown, not 'not exploited'", () => {
+  const f = new FindingStore(openDb(":memory:"), "default");
+  f.replaceSource("grype", [{ assetKey: "a", container: "c", cve: "GHSA-aaaa-bbbb-cccc", pkg: { name: "x", version: "1", arch: "" }, severity: "high", fixState: "unknown" }], 1);
+  f.replaceKev([{ cve: "CVE-2026-1" }], 1);
+  const [item] = f.list({}, { now: 1, maxFeedAgeMs: 86400_000 }).items;
+  assert.equal(item.kev, null);
+  assert.equal(f.list({ kev: false }, { now: 1, maxFeedAgeMs: 86400_000 }).total, 0, "not listed as known not-exploited either");
+});

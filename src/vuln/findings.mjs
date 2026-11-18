@@ -100,7 +100,8 @@ export class FindingStore {
     if (kev === true || kev === false) {
       // Without a fresh KEV list neither answer can be given.
       if (!kevFresh) return { items: [], total: 0, kevFresh, epssFresh };
-      where.push(kev ? "k.cve IS NOT NULL" : "k.cve IS NULL");
+      // The KEV list names CVEs only: a finding without one can't be judged either way.
+      where.push(kev ? "k.cve IS NOT NULL" : "k.cve IS NULL AND f.cve LIKE 'CVE-%'");
     }
     const from = `FROM findings f
       LEFT JOIN kev k ON k.tenant_id = f.tenant_id AND k.cve = f.cve
@@ -115,7 +116,7 @@ export class FindingStore {
       pkg: { name: r.pkg_name, version: r.pkg_version, arch: r.pkg_arch, type: r.pkg_type },
       severity: r.severity, cvss: r.cvss, fixState: r.fix_state, fixedVersion: r.fixed_version, lowConfidence: r.low_confidence === 1,
       detectedAt: r.detected_at, firstSeenAt: r.first_seen_at, lastConfirmedAt: r.last_confirmed_at,
-      kev: kevFresh ? r.kev_cve != null : null,
+      kev: kevFresh && r.cve.startsWith("CVE-") ? r.kev_cve != null : null,
       ransomware: kevFresh && r.kev_cve != null ? r.kev_ransomware === 1 : null,
       epss: epssFresh ? r.epss_score ?? null : null,
       threatDataStale: !(kevFresh && epssFresh)
