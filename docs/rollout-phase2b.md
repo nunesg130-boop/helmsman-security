@@ -100,6 +100,7 @@ fs.writeFileSync(f,JSON.stringify(c,null,2)+"\n")'
 systemctl restart helmsman-security
 ```
 - With more than one tunnel, each tunnel's cloudflared may run on a different machine. Add `connectors:{"TUNNEL_ID":"ITS_MACHINE_IP"}` inside `cloudflare` for every tunnel whose cloudflared isn't at `connectorAddress`; a route to `localhost` is credited to that machine.
+- A public route to a machine whose address the engine can't learn (a VM with no Wazuh agent, such as Home Assistant) blocks every LAN-only verdict. Declare its address under `assets.addresses`, e.g. `"pve:guest:102": ["192.168.0.197"]`; the report lists it as declared, not verified.
 - When you later make a site LAN-only, `@lan remote_ip private_ranges` in Caddy is understood by the engine.
 - `expectedPrivate` is your own list of sites that should **not** be reachable from the internet. Today they all are (none has a LAN-only rule in Caddy), so the engine will report each as an issue until you add those rules — that is the to-do it is there to track. Edit the list to taste, or leave it `[]`.
 - The router lines are your statement of what the ER605 does. If you later add a port forward or enable UPnP, change them here too; the engine can't see the router.

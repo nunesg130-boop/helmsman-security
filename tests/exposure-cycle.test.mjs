@@ -115,3 +115,18 @@ test("when the Proxmox inventory stops refreshing, the map says so and nothing i
   assert.equal(map.sources.inventory, "failed");
   assert.equal(map.machines.find((m) => m.assetKey === "pve:guest:110").exposure, "unknown");
 });
+test("a declared address places a machine the inventory has no address for", async () => {
+  const haos = { vmid: 102, name: "haos", node: "norco", type: "qemu", macs: [], ips: [] };
+  const sources = { ...SOURCES, proxmox: async () => ({ evidence: [], inventory: { nodes: [{ name: "norco", ip: "192.168.0.10" }], guests: [...guests, haos] } }),
+    cloudflare: async () => ({ evidence: [
+      { assetKey: "pve:guest:108", kind: "cloudflare.tunnel", value: { tunnels: [{ id: "t", ingress: [{ hostname: "haos.jellofin.com", path: null, service: "http://192.168.0.197:8123", catchAll: false, hostHeader: null, jwtRequired: false, audTags: 0 }] }] } },
+      { assetKey: "pve:guest:108", kind: "cloudflare.access", value: { apps: [] } },
+      { assetKey: "pve:guest:108", kind: "cloudflare.dns", value: { names: [] } }] }) };
+  const without = await cycle({ sources });
+  assert.equal(without.map.services.find((s) => s.hostname === "haos.jellofin.com").assetKey, null);
+  assert.equal(without.machine("pve:guest:110").exposure, "unknown", "an unplaced public route blocks lan everywhere");
+  const declared = await cycle({ sources, config: { ...CONFIG, assets: { addresses: { "pve:guest:102": ["192.168.0.197"] } } } });
+  assert.equal(declared.map.services.find((s) => s.hostname === "haos.jellofin.com").assetKey, "pve:guest:102");
+  assert.deepEqual([declared.machine("pve:guest:102").exposure, declared.machine("pve:guest:110").exposure], ["internet", "lan"]);
+  assert.deepEqual(declared.map.declaredAddresses, { "pve:guest:102": ["192.168.0.197"] });
+});

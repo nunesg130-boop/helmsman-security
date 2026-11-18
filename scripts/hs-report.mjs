@@ -88,6 +88,7 @@ try {
     if (ex.services == null) console.log(`UNKNOWN: the exposure map is ${ex.status}. This is not 'nothing is exposed'.`);
     else {
       console.log(`sources: Caddy routes ${ex.sources.caddy}, Cloudflare ${ex.sources.cloudflare}, router settings declared (not verified); resolved ${ago(ex.collectedAt)}`);
+      if (ex.declaredAddresses?.length) console.log(`declared machine addresses (not verified): ${ex.declaredAddresses.map((d) => `${d.assetName} ${d.ips.join(", ")}`).join("; ")}`);
       console.log("hostname | path | exposure | entry paths | login gate | upstream -> machine | listening");
       const order = { internet: 0, unknown: 1, lan: 2 };
       const entryName = { forward: "router->Caddy", "tunnel-via-caddy": "tunnel->Caddy", "tunnel-direct": "tunnel" };

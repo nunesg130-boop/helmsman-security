@@ -48,6 +48,8 @@ export function buildExposureMap({ store, config, assets, inventories, now }) {
   const add = (key, ip) => { if (ips.has(key) && parseV4(ip) != null) ips.get(key).add(ip); };
   for (const n of inventories.proxmox?.nodes ?? []) add(`pve:node:${n.name}`, n.ip);
   for (const g of inventories.proxmox?.guests ?? []) for (const ip of g.ips ?? []) add(`pve:guest:${g.vmid}`, ip);
+  const declared = config.assets?.addresses ?? {};
+  for (const [key, list] of Object.entries(declared)) for (const ip of list) add(key, ip);
   for (const agent of inventories.wazuh?.agents ?? []) {
     const owner = machines.find((a) => !a.assetKey.startsWith("wazuh:agent:") && a.sources?.wazuh?.id === String(agent.id)) ?? machines.find((a) => a.assetKey === `wazuh:agent:${agent.id}`);
     if (owner) add(owner.assetKey, agent.ip);
@@ -77,6 +79,7 @@ export function buildExposureMap({ store, config, assets, inventories, now }) {
     problems: out.problems,
     sources: out.sources,
     machines: [...out.machines].map(([assetKey, m]) => ({ assetKey, name: byKey.get(assetKey)?.name ?? assetKey, ...m })),
+    declaredAddresses: declared,
     router: { portForwards: router.portForwards?.length ?? null, upnp: router.upnp, dmz: router.dmz, ipv6Inbound: router.ipv6Inbound }
   };
 }

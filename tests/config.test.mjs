@@ -128,3 +128,12 @@ test("exposure.cloudflare.connectors maps listed tunnels to IPv4 addresses", asy
   assert.throws(() => parse({ ...base, exposure: { cloudflare: { ...cf, connectors: { t2: "nope" } } } }), /connectors/u);
   assert.throws(() => parse({ ...base, exposure: { cloudflare: { ...cf, connectors: { t9: "192.168.0.9" } } } }), /connectors/u);
 });
+test("assets.addresses declares IPv4 addresses for machines the engine can't learn them for", async () => {
+  const { parseConfig: parse } = await import("../src/config.mjs");
+  const base = { listen: { adminAllowIp: "192.168.0.105" }, owner: { authentikUser: "o" } };
+  assert.deepEqual(parse({ ...base, assets: { addresses: { "pve:guest:102": ["192.168.0.197"] } } }).assets.addresses, { "pve:guest:102": ["192.168.0.197"] });
+  assert.deepEqual(parse(base).assets.addresses, {});
+  for (const bad of [{ "pve:guest:102": "192.168.0.197" }, { "pve:guest:102": ["haos.lan"] }, ["192.168.0.197"]]) {
+    assert.throws(() => parse({ ...base, assets: { addresses: bad } }), /assets\.addresses/u);
+  }
+});
