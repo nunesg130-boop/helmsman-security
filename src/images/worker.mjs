@@ -7,7 +7,7 @@
 // allows the registries of queued images and the Grype database host.
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fchmodSync, fsyncSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import { join } from "node:path";
@@ -26,10 +26,10 @@ export const fileId = (digest) => digest.replace(":", "-");
 
 // Write a file so that it either has its full new content or isn't changed:
 // temp file in the same directory, fsync, rename.
-export function writeAtomic(dir, name, text) {
+export function writeAtomic(dir, name, text, mode = 0o640) {
   const tmp = join(dir, `.${name}.${randomBytes(4).toString("hex")}.tmp`);
-  const fd = openSync(tmp, "w", 0o640);
-  try { writeSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); }
+  const fd = openSync(tmp, "w", mode);
+  try { fchmodSync(fd, mode); writeSync(fd, text); fsyncSync(fd); } finally { closeSync(fd); } // fchmod: the umask must not narrow it
   renameSync(tmp, join(dir, name));
 }
 
