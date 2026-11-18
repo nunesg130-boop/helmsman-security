@@ -9,6 +9,8 @@ export async function collectDocker({ http, hosts, now = Date.now }) {
     try {
       const list = await http.fetchJson(`${base}/containers/json?all=1`, { timeoutMs: 8000 });
       if (!Array.isArray(list)) throw Object.assign(new Error("container list is not a list"), { code: "parse" });
+      const images = await http.fetchJson(`${base}/images/json`, { timeoutMs: 8000 });
+      if (!Array.isArray(images)) throw Object.assign(new Error("image list is not a list"), { code: "parse" });
       const version = await http.fetchJson(`${base}/version`, { timeoutMs: 8000 });
       const t = now();
       evidence.push({
@@ -27,6 +29,7 @@ export async function collectDocker({ http, hosts, now = Date.now }) {
       // all=1 includes stopped containers and the endpoint isn't paged, so a
       // well-formed answer is the whole list.
       evidence.push({ assetKey: h.assetKey, kind: "docker.containers.meta", collectedAt: t, value: { complete: true, rows: list.length, all: true } });
+      evidence.push({ assetKey: h.assetKey, kind: "docker.images", collectedAt: t, value: images.map((i) => ({ id: i.Id ?? null, repoTags: i.RepoTags ?? [], repoDigests: i.RepoDigests ?? [] })) });
       evidence.push({ assetKey: h.assetKey, kind: "docker.engine", collectedAt: t, value: { version: version?.Version ?? null, apiVersion: version?.ApiVersion ?? null } });
     } catch (error) {
       warnings.push(`docker host ${h.name}: ${error.code ?? "error"} ${error.message}`);

@@ -22,7 +22,7 @@ const PRODUCTS = ["debian", "ubuntu", "proxmox-ve", "macos", "fedora", "docker-e
 const pve = await startFixtureServer(proxmoxRoutes());
 const wz = await startFixtureServer(wazuhRoutes());
 const eol = await startFixtureServer(Object.fromEntries(PRODUCTS.map((p) => [`/api/v1/products/${p}`, eolFixture(p)])));
-const docker = await startFixtureServer({ "/containers/json": [{ Names: ["/sonarr"], Image: "sonarr", State: "running", Ports: [] }], "/version": { Version: "27.3.1", ApiVersion: "1.47" } }, { tls: false });
+const docker = await startFixtureServer({ "/containers/json": [{ Names: ["/sonarr"], Image: "sonarr", State: "running", Ports: [] }], "/images/json": [], "/version": { Version: "27.3.1", ApiVersion: "1.47" } }, { tls: false });
 
 const ix = await startFixtureServer({
   ...indexerRoutes([vulnDoc({ agent: "001", name: "norco", cve: "CVE-2024-1000" }), vulnDoc({ agent: "001", name: "norco", cve: "CVE-2024-2000", condition: "Package default status" })]),
