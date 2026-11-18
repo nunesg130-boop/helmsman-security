@@ -166,7 +166,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       const { map, status } = readExposureMap(store, t);
       const head = { configured: exposureConfigured, status, collectedAt: store.get(GLOBAL_KEY, "exposure.map")?.collectedAt ?? null };
       // No usable map: no lists at all, so "none" can't be read into it.
-      if (!map) return [200, { ...head, services: null, problems: null, sources: null, machines: null, router: null }];
+      if (!map) return [200, { ...head, services: null, problems: null, sources: null, machines: null, router: null, declaredAddresses: null }];
       const names = assetNames();
       const name = (key) => (key ? names.get(key) ?? key : null);
       return [200, {
@@ -175,7 +175,8 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
         problems: map.problems.map((p) => ({ ...p, assetName: name(p.assetKey) })),
         sources: map.sources,
         machines: map.machines.map((m) => ({ assetKey: m.assetKey, assetName: names.get(m.assetKey) ?? m.name ?? m.assetKey, exposure: m.exposure, role: m.role, directForwards: m.directForwards, reason: m.reason })),
-        router: map.router ?? null
+        router: map.router ?? null,
+        declaredAddresses: Object.entries(map.declaredAddresses ?? {}).map(([assetKey, ips]) => ({ assetKey, assetName: name(assetKey), ips }))
       }];
     },
     "/api/v1/posture": () => {

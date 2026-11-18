@@ -39,7 +39,7 @@ export function parseConfig(raw) {
     wazuh: raw.wazuh ?? null,
     docker: raw.docker ?? [],
     eol: { products: ["debian", "ubuntu", "fedora", "macos", "proxmox-ve", "docker-engine"], software: DEFAULT_SOFTWARE, ...(raw.eol ?? {}) },
-    assets: { roaming: [], appliances: [], ...(raw.assets ?? {}) },
+    assets: { roaming: [], appliances: [], addresses: {}, ...(raw.assets ?? {}) },
     network: raw.network ?? [],
     exposure: raw.exposure ?? null
   };
@@ -107,6 +107,11 @@ export function parseConfig(raw) {
   }
   need(Array.isArray(c.eol.products) && c.eol.products.every(isStr), "eol.products must be a list of product slugs");
   need(Array.isArray(c.assets.roaming) && Array.isArray(c.assets.appliances), "assets.roaming and assets.appliances must be lists");
+  // Addresses the owner declares for machines whose address the engine can't learn
+  // (a VM with no agent, such as Home Assistant). Shown as declared, not verified.
+  const addr = c.assets.addresses;
+  need(addr && typeof addr === "object" && !Array.isArray(addr) && Object.values(addr).every((list) => Array.isArray(list) && list.length > 0 && list.every(isV4)),
+    "assets.addresses must map machine keys to lists of IPv4 addresses");
   return c;
 }
 

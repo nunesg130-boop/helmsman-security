@@ -25,7 +25,8 @@ const MAP = {
     { assetKey: "pve:guest:110", name: "pihole", exposure: "lan", role: null, services: [], directForwards: [], reason: "no public route" }
   ],
   problems: [{ kind: "unverified_gate", origin: "caddy", hostname: "odd.jellofin.com", upstream: "192.168.0.109:8000", assetKey: "pve:guest:109", reason: "not verified" }],
-  sources: { caddy: "ok", cloudflare: "ok", router: "declared" }, router: { portForwards: 2, upnp: false, dmz: false, ipv6Inbound: false }
+  sources: { caddy: "ok", cloudflare: "ok", router: "declared" }, router: { portForwards: 2, upnp: false, dmz: false, ipv6Inbound: false },
+  declaredAddresses: { "pve:guest:110": ["192.168.0.2"] }
 };
 
 async function setup({ map = MAP, mapAt = Date.now(), failExposure = false, kev = true, uncovered = 0, configured = true } = {}) {
@@ -129,6 +130,7 @@ test("GET /api/v1/exposure lists services, problems, sources and machines with n
   assert.equal(body.services[0].assetName, "Jelly-Arr");
   assert.deepEqual(body.machines.find((m) => m.assetKey === "pve:guest:201"), { assetKey: "pve:guest:201", assetName: "docker-auth", exposure: "internet", role: "gate", directForwards: [], reason: "runs the login gate" });
   assert.ok(body.collectedAt > 0);
+  assert.deepEqual(body.declaredAddresses, [{ assetKey: "pve:guest:110", assetName: "pihole", ips: ["192.168.0.2"] }]);
 }));
 test("GET /api/v1/exposure without a usable map says so and gives no lists", async () => {
   await using({ map: null }, async (port) => {
