@@ -4,6 +4,11 @@ import { LedgerStore } from "../ledger.mjs";
 import { evidenceKey } from "../checks/runner.mjs";
 import { FindingStore } from "../vuln/findings.mjs";
 import { VULN_COLLECTOR } from "../vuln/cycle.mjs";
+import { HoldStore } from "../holds.mjs";
+import { annotateFindings, readExposureMap } from "../vuln/annotate.mjs";
+import { postureScore, SCORE_RULES } from "../vuln/score.mjs";
+import { URGENCY_RULES } from "../vuln/urgency.mjs";
+import { GLOBAL_KEY } from "../checks/runner.mjs";
 
 // Read-only API for Helmsman. GET only, bearer token required on every
 // route, bounded responses, no admin functions on this port at all.
@@ -27,9 +32,11 @@ function paginate(items, url) {
   return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: items.length };
 }
 
-export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, vulnStaleAfterMs = 3 * 3600_000, maxFeedAgeMs = 7 * 86400_000, now = Date.now }) {
+export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, vulnStaleAfterMs = 3 * 3600_000, maxFeedAgeMs = 7 * 86400_000, exposureConfigured = false, now = Date.now }) {
   const ledger = new LedgerStore(db, tenantId);
   const findings = new FindingStore(db, tenantId);
+  const holds = new HoldStore(db, tenantId);
+  const ALL = Number.MAX_SAFE_INTEGER;
 
   // Findings are only as current as the last successful vulnerability read.
   function vulnMeta() {
@@ -117,12 +124,32 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       if (severity && !SEVERITIES.has(severity)) return [400, { error: "severity must be critical, high, medium, low or unknown" }];
       if (kev && kev !== "true" && kev !== "false") return [400, { error: "kev must be true or false" }];
       const meta = vulnMeta();
+      const urgent = q.get("urgent");
+      const possibly = q.get("possiblyUrgent");
+      if (urgent && urgent !== "true" && urgent !== "unknown") return [400, { error: "urgent must be true or unknown" }];
+      if (possibly && possibly !== "true") return [400, { error: "possiblyUrgent must be true" }];
       if (kev && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so findings can't be filtered by it", ...meta }];
+      const t = now();
+      const exposure = readExposureMap(store, t);
+      // Without the exposure map nothing can be confirmed urgent; an empty
+      // list here would read as "nothing urgent".
+      if (urgent === "true" && exposure.status !== "ok") return [409, { error: `the exposure map is ${exposure.status}${exposure.detail ? ` (${exposure.detail})` : ""}, so urgency can't be established`, exposureStatus: exposure.status, ...meta }];
+      // Without a current KEV list, findings that may be urgent can't be confirmed either way.
+      if (urgent === "true" && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so the urgent list would be incomplete", exposureStatus: exposure.status, ...meta }];
       const limit = Math.max(1, intParam(url, "limit", 50, 200));
       const offset = intParam(url, "offset", 0, Number.MAX_SAFE_INTEGER);
-      const { items, total } = findings.list({ assetKey: q.get("asset") || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined, limit, offset }, { now: now(), maxFeedAgeMs });
+      const filters = { assetKey: q.get("asset") || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined };
       const names = assetNames();
-      return [200, { items: items.map((i) => ({ ...i, assetName: names.get(i.assetKey) ?? i.assetKey })), total, limit, offset, ...meta }];
+      const named = (list) => list.map((i) => ({ ...i, assetName: names.get(i.assetKey) ?? i.assetKey }));
+      const annotate = (list) => annotateFindings(list, { map: exposure.map, holds, now: t });
+      if (urgent || possibly) {
+        // Urgency is computed, not stored: annotate everything, then filter and page.
+        const every = annotate(findings.list({ ...filters, limit: ALL, offset: 0 }, { now: t, maxFeedAgeMs }).items)
+          .filter((i) => (!urgent || (urgent === "true" ? i.urgent === true : i.urgent === null)) && (!possibly || i.possiblyUrgent));
+        return [200, { items: named(every.slice(offset, offset + limit)), total: every.length, limit, offset, exposureStatus: exposure.status, ...meta }];
+      }
+      const { items, total } = findings.list({ ...filters, limit, offset }, { now: t, maxFeedAgeMs });
+      return [200, { items: named(annotate(items)), total, limit, offset, exposureStatus: exposure.status, ...meta }];
     },
     "/api/v1/vulnerabilities/summary": () => {
       const names = assetNames();
@@ -133,6 +160,38 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       totals.kev = meta.kevStale ? null : assets.reduce((n, a) => n + (a.kev ?? 0), 0);
       // Never read successfully: there are no figures to give, not zeros.
       return [200, { assets, totals: meta.collection.lastSuccessAt == null ? null : totals, ...meta }];
+    },
+    "/api/v1/exposure": () => {
+      const t = now();
+      const { map, status } = readExposureMap(store, t);
+      const head = { configured: exposureConfigured, status, collectedAt: store.get(GLOBAL_KEY, "exposure.map")?.collectedAt ?? null };
+      // No usable map: no lists at all, so "none" can't be read into it.
+      if (!map) return [200, { ...head, services: null, problems: null, sources: null, machines: null, router: null }];
+      const names = assetNames();
+      const name = (key) => (key ? names.get(key) ?? key : null);
+      return [200, {
+        ...head,
+        services: map.services.map((s) => ({ ...s, assetName: name(s.assetKey) })),
+        problems: map.problems.map((p) => ({ ...p, assetName: name(p.assetKey) })),
+        sources: map.sources,
+        machines: map.machines.map((m) => ({ assetKey: m.assetKey, assetName: names.get(m.assetKey) ?? m.name ?? m.assetKey, exposure: m.exposure, role: m.role, directForwards: m.directForwards, reason: m.reason })),
+        router: map.router ?? null
+      }];
+    },
+    "/api/v1/posture": () => {
+      const t = now();
+      const meta = vulnMeta();
+      const exposure = readExposureMap(store, t);
+      const all = annotateFindings(findings.list({ limit: ALL, offset: 0 }, { now: t, maxFeedAgeMs }).items, { map: exposure.map, holds, now: t });
+      // In scope: every machine the vulnerability coverage check applies to.
+      const coverageRows = rowsNow().filter((r) => r.checkId === "vuln_coverage_host" && r.state !== "not_applicable" && r.state !== "excluded");
+      const score = postureScore({
+        findings: all,
+        coverage: { inScope: coverageRows.length, withoutFreshCoverage: coverageRows.filter((r) => r.state !== "ok").length },
+        freshness: { findingsStale: meta.findingsStale, kevStale: meta.kevStale, exposureStatus: exposure.status, exposureDetail: exposure.detail ?? null }
+      });
+      const names = assetNames();
+      return [200, { ...score, deductions: score.deductions.map((d) => ({ ...d, assetName: names.get(d.assetKey) ?? d.assetKey })), rules: { urgency: URGENCY_RULES, score: SCORE_RULES }, exposureStatus: exposure.status, findingsStale: meta.findingsStale, kevStale: meta.kevStale }];
     },
     "/api/v1/assets": (url) => {
       const counts = new Map();

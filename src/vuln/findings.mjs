@@ -85,12 +85,15 @@ export class FindingStore {
     return { kev: this.#fresh("kev", now, maxFeedAgeMs), epss: this.#fresh("epss", now, maxFeedAgeMs) };
   }
 
-  list({ assetKey, kev, fixState, severity, limit = 100, offset = 0 } = {}, { now, maxFeedAgeMs }) {
+  list({ assetKey, cve, pkgName, pkgVersion, kev, fixState, severity, limit = 100, offset = 0 } = {}, { now, maxFeedAgeMs }) {
     const kevFresh = this.#fresh("kev", now, maxFeedAgeMs);
     const epssFresh = this.#fresh("epss", now, maxFeedAgeMs);
     const where = ["f.tenant_id = ?"];
     const params = [this.tenantId];
     if (assetKey) { where.push("f.asset_key = ?"); params.push(assetKey); }
+    if (cve) { where.push("f.cve = ?"); params.push(cve); }
+    if (pkgName) { where.push("f.pkg_name = ?"); params.push(pkgName); }
+    if (pkgVersion != null) { where.push("f.pkg_version = ?"); params.push(String(pkgVersion)); }
     if (fixState) { where.push("f.fix_state = ?"); params.push(fixState); }
     if (severity) { where.push("f.severity = ?"); params.push(severity); }
     if (kev === true || kev === false) {

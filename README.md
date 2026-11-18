@@ -8,6 +8,10 @@ It collects evidence from Proxmox, Wazuh, Docker and endoflife.date and reports 
 - Design: `docs/superpowers/specs/2026-11-12-security-phase1-design.md`
 - Plan: `docs/superpowers/plans/2026-11-12-security-engine-phase1.md`
 
+Phase 2 adds vulnerability findings from Wazuh with KEV/EPSS context (`docs/rollout-phase2a.md`), then
+exposure reasoning from Caddy, Cloudflare and declared router settings, urgency, risk acceptance and a
+posture score (`docs/rollout-phase2b.md`, `docs/scoring.md`). Design: `docs/superpowers/specs/2026-11-15-security-phase2-design.md`.
+
 Node.js 24, no npm dependencies. `npm test`, `npm run lint`, `npm run smoke`.
 
 ## Running it (operator notes)

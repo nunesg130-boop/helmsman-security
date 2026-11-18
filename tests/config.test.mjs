@@ -81,3 +81,42 @@ test("the indexer must be https, pinned, and its user can't contain a colon", ()
   assert.throws(() => parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { ...ix, certSha256: undefined } } }), /certSha256/u);
   assert.throws(() => parseConfig({ ...minimal, wazuh: { ...WZ, indexer: { ...ix, user: "a:b" } } }), /colon/u);
 });
+
+// --- exposure (phase 2B) ---
+const EXPO = {
+  caddy: { url: "http://192.168.0.105:2020/shape.json", assetKey: "pve:guest:105", address: "192.168.0.105" },
+  cloudflare: { accountId: "acc", zoneId: "zone", tunnelIds: ["t1"], assetKey: "pve:guest:107", connectorAddress: "192.168.0.108" },
+  expectedPrivate: ["paperless.jellofin.com"]
+};
+const NET = [{ name: "er605", portForwards: [{ wanPort: 443, lanIp: "192.168.0.105", lanPort: 443, protocol: "tcp" }], upnp: false, dmz: false, ipv6Inbound: false }];
+
+test("exposure config parses with defaults", () => {
+  const c = parseConfig({ ...minimal, exposure: EXPO, network: NET });
+  assert.equal(c.exposure.caddy.maxAgeMinutes, 30);
+  assert.deepEqual(c.exposure.caddy.trustedClientIpHeaders, ["Cf-Connecting-Ip"]);
+  assert.deepEqual(c.exposure.expectedPrivate, ["paperless.jellofin.com"]);
+  assert.equal(c.network[0].portForwards[0].lanIp, "192.168.0.105");
+  assert.equal(parseConfig(minimal).exposure, null);
+});
+test("exposure config is validated", () => {
+  const bad = (exposure, re, network = NET) => assert.throws(() => parseConfig({ ...minimal, exposure, network }), re);
+  bad({ ...EXPO, caddy: { ...EXPO.caddy, url: "ftp://x/shape.json" } }, /exposure\.caddy\.url/u);
+  bad({ ...EXPO, caddy: { ...EXPO.caddy, address: "caddy" } }, /exposure\.caddy\.address/u);
+  bad({ ...EXPO, caddy: { ...EXPO.caddy, assetKey: "" } }, /assetKey/u);
+  bad({ ...EXPO, cloudflare: { ...EXPO.cloudflare, tunnelIds: [] } }, /tunnelIds/u);
+  bad({ ...EXPO, cloudflare: { ...EXPO.cloudflare, connectorAddress: "x" } }, /connectorAddress/u);
+  bad({ ...EXPO, expectedPrivate: "paperless" }, /expectedPrivate/u);
+  bad(EXPO, /portForwards/u, [{ name: "r", portForwards: [{ wanPort: 70000, lanIp: "192.168.0.105", lanPort: 443, protocol: "tcp" }] }]);
+  bad(EXPO, /portForwards/u, [{ name: "r", portForwards: [{ wanPort: 443, lanIp: "nope", lanPort: 443, protocol: "tcp" }] }]);
+  bad(EXPO, /portForwards/u, [{ name: "r", portForwards: [{ wanPort: 443, lanIp: "192.168.0.105", lanPort: 443, protocol: "icmp" }] }]);
+  bad(EXPO, /upnp/u, [{ name: "r", upnp: "off" }]);
+  bad(EXPO, /dmz/u, [{ name: "r", dmz: "somewhere" }]);
+});
+test("egress adds the Caddy host (http) and Cloudflare's API only when configured", () => {
+  const none = egressHosts(parseConfig(minimal));
+  assert.ok(!none.allowHosts.includes("api.cloudflare.com") && !none.allowHttpHosts.includes("192.168.0.105"));
+  const some = egressHosts(parseConfig({ ...minimal, exposure: EXPO }));
+  assert.ok(some.allowHosts.includes("api.cloudflare.com") && some.allowHttpHosts.includes("192.168.0.105"));
+  const caddyOnly = egressHosts(parseConfig({ ...minimal, exposure: { caddy: EXPO.caddy } }));
+  assert.ok(!caddyOnly.allowHosts.includes("api.cloudflare.com"));
+});

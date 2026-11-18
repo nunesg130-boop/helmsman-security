@@ -23,7 +23,11 @@ function get(path) {
       let body = "";
       res.on("data", (d) => { body += d; });
       res.on("end", () => {
-        if (res.statusCode !== 200) return reject(new Error(`${path}: HTTP ${res.statusCode}${res.statusCode === 401 ? " (wrong API token?)" : ""}`));
+        if (res.statusCode !== 200) {
+          let detail = null;
+          try { detail = JSON.parse(body).error ?? null; } catch { /* not JSON */ }
+          return reject(Object.assign(new Error(`${path}: HTTP ${res.statusCode}${res.statusCode === 401 ? " (wrong API token?)" : ""}`), { statusCode: res.statusCode, detail }));
+        }
         try { resolve(JSON.parse(body)); } catch { reject(new Error(`${path}: not JSON`)); }
       });
     }).on("error", reject);
@@ -76,6 +80,62 @@ try {
         if (!kev.length) console.log(v.findingsStale ? "(none in the last known data)" : "(none)");
       }
     }
+  }
+
+  const ex = await get("/api/v1/exposure");
+  if (ex.configured) {
+    console.log("=== PUBLIC ROUTES ===");
+    if (ex.services == null) console.log(`UNKNOWN: the exposure map is ${ex.status}. This is not 'nothing is exposed'.`);
+    else {
+      console.log(`sources: Caddy routes ${ex.sources.caddy}, Cloudflare ${ex.sources.cloudflare}, router settings declared (not verified); resolved ${ago(ex.collectedAt)}`);
+      console.log("hostname | path | exposure | entry paths | login gate | upstream -> machine | listening");
+      const order = { internet: 0, unknown: 1, lan: 2 };
+      const entryName = { forward: "router->Caddy", "tunnel-via-caddy": "tunnel->Caddy", "tunnel-direct": "tunnel" };
+      const gateName = (g) => (g === "unknown" ? "UNVERIFIED" : g);
+      for (const s of [...ex.services].sort((a, b) => order[a.exposure] - order[b.exposure] || a.hostname.localeCompare(b.hostname) || String(a.path).localeCompare(String(b.path)))) {
+        const live = s.paths.filter((p) => p.reachable !== false);
+        const paths = s.paths.length ? s.paths.map((p) => `${entryName[p.entry] ?? p.entry}${p.reachable === true ? "" : p.reachable === false ? " (blocked)" : " (unknown)"}`).join(", ") : "none";
+        const differ = new Set(live.map((p) => p.gate)).size > 1;
+        const gate = `${gateName(s.gate)}${differ ? ` (${live.map((p) => `${entryName[p.entry] ?? p.entry}: ${gateName(p.gate)}`).join(", ")})` : ""}`;
+        const target = s.upstream ? `${s.upstream} -> ${s.assetName ?? "unknown machine"}` : (s.assetName ? `answered by ${s.assetName}` : "unknown");
+        console.log(`${s.hostname} | ${s.path ?? "*"} | ${s.exposure} | ${paths} | ${gate} | ${target} | ${s.listening === true ? "yes" : s.listening === false ? "NO" : "unknown"}`);
+      }
+      console.log("=== ROUTE PROBLEMS ===");
+      for (const p of ex.problems) console.log(`${p.kind} | ${p.hostname ?? "-"} | ${p.upstream ?? "-"} | ${p.reason}`);
+      if (!ex.problems.length) console.log("(none)");
+    }
+
+    const listed = async (query) => {
+      const items = [];
+      for (let offset = 0; ; offset += 200) {
+        const r = await get(`/api/v1/vulnerabilities?${query}&limit=200&offset=${offset}`);
+        items.push(...r.items);
+        if (items.length >= r.total || r.items.length === 0) return items;
+      }
+    };
+    const row = (k) => `${k.assetName} | ${k.cve} | ${k.pkg.name} ${k.pkg.version} | ${k.urgencyWhy}`;
+    const MAX_LINES = 60;
+    const print = (items, extra = () => "") => {
+      for (const k of items.slice(0, MAX_LINES)) console.log(row(k) + extra(k));
+      if (items.length > MAX_LINES) console.log(`... and ${items.length - MAX_LINES} more`);
+      if (!items.length) console.log("(none)");
+    };
+    console.log("=== URGENT ===");
+    try { print(await listed("urgent=true")); }
+    catch (error) { if (error.statusCode !== 409) throw error; console.log(`UNKNOWN: ${error.detail ?? "urgency can't be established"}. This is not 'nothing urgent'.`); }
+    console.log("=== POSSIBLY URGENT ===");
+    const uncertain = (k) => {
+      const why = [];
+      if (k.exposure === "unknown") why.push("exposure unknown");
+      if (k.kev === null) why.push("KEV status unknown");
+      if (k.possibleExposure) why.push(`may be what serves ${k.via ?? "a public route"}${k.gate === "unknown" ? ", gate unverified" : ""}`);
+      return why.length ? ` | uncertain: ${why.join("; ")}` : "";
+    };
+    print(await listed("possiblyUrgent=true"), uncertain);
+
+    const p = await get("/api/v1/posture");
+    if (p.state === "scored") console.log(`POSTURE ${p.confirmed} based on confirmed findings; ${p.pessimistic} in the pessimistic case (rules v${p.rules.score})`);
+    else console.log(`POSTURE incomplete: ${p.incompleteReasons.join("; ")}`);
   }
 } catch (error) {
   console.error(`hs-report: ${error.message}`);

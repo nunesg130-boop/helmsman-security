@@ -13,27 +13,32 @@
   form.grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .35rem .75rem; align-items: center; margin-top: 1rem; max-width: 560px; }
   form.grid label { color: #a8a8b8; } form.grid input, form.grid select { margin: 0; width: 100%; box-sizing: border-box; }
   form.grid button { grid-column: 2; justify-self: start; margin: .25rem 0 0; } form.grid .hint { grid-column: 2; color: #8a8a9a; font-size: .85rem; margin: -.2rem 0 .1rem; }
-  form.grid .hold-only[hidden], form.grid .exclusion-only[hidden] { display: none; }
+  form.grid .hold-only[hidden], form.grid .exclusion-only[hidden], form.grid .acceptance-only[hidden] { display: none; }
 </style>
 </head>
 <body>
 <h1>Helmsman Security — admin</h1>
-<p>Holds, exclusions, manual asset links and credentials. Changes here never touch your machines; the engine is read-only.</p>
+<p>Holds, exclusions, risk acceptances, manual asset links and credentials. Changes here never touch your machines; the engine is read-only.</p>
 <p id="msg" class="msg" role="status"></p>
 
-<h2>Holds and exclusions</h2>
+<h2>Holds, exclusions and risk acceptances</h2>
 <table id="holds"><thead><tr><th>Kind</th><th>Asset</th><th>Check / product</th><th>Reason</th><th>Expires</th><th></th></tr></thead><tbody></tbody></table>
 <form id="hold-form" class="grid">
   <label for="h-kind">Kind</label>
-  <select id="h-kind" name="kind"><option value="exclusion">exclusion</option><option value="hold">hold</option></select>
+  <select id="h-kind" name="kind"><option value="exclusion">exclusion</option><option value="hold">hold</option><option value="acceptance">acceptance</option></select>
   <label for="h-asset">Asset</label>
   <input id="h-asset" name="assetKey" placeholder="e.g. pve:guest:152" required>
   <label for="h-check" class="exclusion-only">Check</label>
   <input id="h-check" name="checkId" class="exclusion-only" placeholder="check id, or * for the whole machine">
+  <label for="h-cve" class="acceptance-only" hidden>CVE</label>
+  <input id="h-cve" name="cve" class="acceptance-only" placeholder="e.g. CVE-2026-12345" hidden>
+  <label for="h-package" class="acceptance-only" hidden>Package</label>
+  <input id="h-package" name="package" class="acceptance-only" placeholder="exactly as the report shows it" hidden>
   <label for="h-product" class="hold-only" hidden>Product</label>
   <input id="h-product" name="product" class="hold-only" placeholder="e.g. debian" hidden>
-  <label for="h-version" class="hold-only" hidden>Version</label>
-  <input id="h-version" name="version" class="hold-only" placeholder="e.g. 12" hidden>
+  <label for="h-version" class="hold-only acceptance-only" hidden>Version</label>
+  <input id="h-version" name="version" class="hold-only acceptance-only" placeholder="e.g. 12" hidden>
+  <p class="hint acceptance-only" hidden>An acceptance covers one CVE in one package version on one machine. It stops applying if the finding becomes known-exploited, more exposed, or loses its login gate.</p>
   <label for="h-reason">Reason</label>
   <input id="h-reason" name="reason" placeholder="required" required>
   <label for="h-expires">Expires</label>
@@ -56,7 +61,7 @@
 <table id="creds"><thead><tr><th>Name</th><th>Last set</th></tr></thead><tbody></tbody></table>
 <form id="cred-form" class="grid">
   <label for="c-name">Credential</label>
-  <select id="c-name" name="name" required><option value="" selected disabled>choose…</option><option>proxmox.tokenSecret</option><option>wazuh.password</option><option>wazuh.indexerPassword</option></select>
+  <select id="c-name" name="name" required><option value="" selected disabled>choose…</option><option>proxmox.tokenSecret</option><option>wazuh.password</option><option>wazuh.indexerPassword</option><option>cloudflare.apiToken</option></select>
   <label for="c-value">Value</label>
   <input id="c-value" name="value" type="password" placeholder="paste it; don't autofill" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore required>
   <p class="hint">Replaces the stored value. Values are never shown again.</p>
@@ -79,7 +84,7 @@ async function load() {
   const hb = $("#holds tbody"); hb.replaceChildren();
   for (const h of holds) {
     const tr = document.createElement("tr");
-    cell(tr, h.kind + (h.expired ? " (expired)" : "")); cell(tr, h.assetKey); cell(tr, h.checkId === "*" ? "whole machine" : (h.checkId ?? `${h.product} ${h.version}`)); cell(tr, h.reason);
+    cell(tr, h.kind + (h.expired ? " (expired)" : "")); cell(tr, h.assetKey); cell(tr, h.kind === "acceptance" ? `${h.checkId} in ${h.product} ${h.version}` : h.checkId === "*" ? "whole machine" : (h.checkId ?? `${h.product} ${h.version}`)); cell(tr, h.reason);
     cell(tr, h.expiresAt ? new Date(h.expiresAt).toLocaleString() : "never");
     cell(tr, "").append(button("Remove", async () => { await api(`/admin/holds/${h.id}`, "DELETE"); load(); }));
     hb.append(tr);
@@ -97,16 +102,18 @@ async function load() {
   for (const c of creds) { const tr = document.createElement("tr"); cell(tr, c.name); cell(tr, new Date(c.updatedAt).toLocaleString()); cb.append(tr); }
 }
 function showKindFields() {
-  const hold = $("#h-kind").value === "hold";
-  for (const el of document.querySelectorAll("#hold-form .hold-only")) el.hidden = !hold;
-  for (const el of document.querySelectorAll("#hold-form .exclusion-only")) el.hidden = hold;
+  const kind = $("#h-kind").value;
+  for (const el of document.querySelectorAll("#hold-form .hold-only, #hold-form .exclusion-only, #hold-form .acceptance-only")) el.hidden = !el.classList.contains(`${kind}-only`);
 }
 $("#h-kind").addEventListener("change", showKindFields);
 $("#hold-form").addEventListener("reset", () => setTimeout(showKindFields));
 $("#hold-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = Object.fromEntries(new FormData(e.target));
-  if (f.kind === "hold") delete f.checkId; else { delete f.product; delete f.version; }
+  if (f.kind !== "exclusion") delete f.checkId;
+  if (f.kind !== "hold") delete f.product;
+  if (f.kind === "exclusion") delete f.version;
+  if (f.kind !== "acceptance") { delete f.cve; delete f.package; }
   if (f.expires) f.expiresAt = new Date(`${f.expires}T23:59:59`).getTime();
   delete f.expires;
   for (const k of Object.keys(f)) if (!f[k]) delete f[k];

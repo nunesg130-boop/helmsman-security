@@ -6,6 +6,11 @@
   "wazuh": { "baseUrl": "https://<wazuh-vm-ip>:55000", "user": "helmsec-ro", "certSha256": "<sha256 fingerprint of the Wazuh API certificate>" },
   "docker": [{ "name": "docker-vm", "baseUrl": "http://192.168.0.109:2375", "assetKey": "pve:guest:109" }],
   "assets": { "roaming": ["legion", "macbook"], "appliances": ["haos"] },
-  "network": [{ "name": "er605", "ip": "192.168.0.1" }],
+  "network": [{ "name": "er605", "ip": "192.168.0.1", "portForwards": [{ "wanPort": 443, "lanIp": "192.168.0.105", "lanPort": 443, "protocol": "tcp" }], "upnp": false, "dmz": false, "ipv6Inbound": false }],
+  "exposure": {
+    "caddy": { "url": "http://192.168.0.105:2020/shape.json", "assetKey": "pve:guest:105", "address": "192.168.0.105" },
+    "cloudflare": { "accountId": "<account id>", "zoneId": "<zone id>", "tunnelIds": ["<tunnel id>"], "assetKey": "pve:guest:108", "connectorAddress": "192.168.0.108" },
+    "expectedPrivate": ["security.example.com"]
+  },
   "thresholds": { "backupMaxAgeDays": 2 }
 }

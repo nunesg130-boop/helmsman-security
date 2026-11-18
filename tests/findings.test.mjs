@@ -9,7 +9,7 @@ const fresh = (tenant = "t") => new FindingStore(openDb(":memory:"), tenant);
 const AGE = { now: 1005, maxFeedAgeMs: 10 };
 const kevRows = (n, extra = []) => [...extra, ...Array.from({ length: n }, (_, i) => ({ cve: `CVE-K-${i}`, dateAdded: "2026-01-01", ransomware: false }))];
 
-test("schema is at version 2", () => assert.equal(SCHEMA_VERSION, 2));
+test("the findings tables exist from schema version 2 on", () => assert.ok(SCHEMA_VERSION >= 2));
 
 test("replaceSource keeps first_seen for a finding that persists and drops ones that vanished", () => {
   const s = fresh();

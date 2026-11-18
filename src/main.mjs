@@ -14,6 +14,8 @@ import { collectProxmox } from "./collectors/proxmox.mjs";
 import { collectWazuh } from "./collectors/wazuh.mjs";
 import { createWazuh414 } from "./collectors/wazuh414.mjs";
 import { collectDocker } from "./collectors/docker.mjs";
+import { collectCaddyShape } from "./collectors/caddy-shape.mjs";
+import { collectCloudflare } from "./collectors/cloudflare.mjs";
 import { collectEolDataset, EOL_BASE } from "./collectors/eol-dataset.mjs";
 import { collectionCycle, eolCycle } from "./cycle.mjs";
 import { runCollector } from "./collect.mjs";
@@ -21,6 +23,7 @@ import { createWazuhIndexer414 } from "./collectors/wazuh-indexer414.mjs";
 import { refreshThreatFeeds } from "./collectors/threat-feeds.mjs";
 import { FindingStore } from "./vuln/findings.mjs";
 import { vulnCycle } from "./vuln/cycle.mjs";
+import { currentFindingContext } from "./vuln/annotate.mjs";
 import { threshold } from "./checks/thresholds.mjs";
 import { startScheduler } from "./scheduler.mjs";
 import { createPublicServer } from "./api/public.mjs";
@@ -64,7 +67,9 @@ export async function start({
   kevUrl = KEV_URL,
   epssUrl = EPSS_URL,
   feedCertSha256 = null, // tests only: pin local stand-ins for the threat feeds
-  feedMinimums = {} // tests only: { minKev, minEpss }
+  feedMinimums = {}, // tests only: { minKev, minEpss }
+  cloudflareBase = null, // tests only: a local stand-in for the Cloudflare API
+  cloudflareCertSha256 = null
 } = {}) {
   const config = loadConfig(configPath);
   const box = createSecretBox(loadMasterKey(keyPath));
@@ -87,8 +92,9 @@ export async function start({
   const hosts = egressHosts(config);
   if (eolBase !== EOL_BASE) hosts.allowHosts.push(new URL(eolBase).hostname);
   for (const [url, real] of [[kevUrl, KEV_URL], [epssUrl, EPSS_URL]]) if (url !== real) hosts.allowHosts.push(new URL(url).hostname);
+  if (cloudflareBase) hosts.allowHosts.push(new URL(cloudflareBase).hostname);
   const http = createHttp(hosts);
-  const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
+  const secretValues = () => ["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "cloudflare.apiToken", "api.readToken"].map((n) => credentials.get(n)).filter(Boolean);
 
   const sources = {};
   if (config.proxmox) sources.proxmox = () => collectProxmox({ http, cfg: config.proxmox, secret: requireCredential(credentials, "proxmox.tokenSecret"), now });
@@ -99,6 +105,13 @@ export async function start({
     });
   }
   if (config.docker.length) sources.docker = () => collectDocker({ http, hosts: config.docker, now });
+  // Exposure sources: the route shape Caddy's host exports, and Cloudflare's
+  // tunnel, Access and DNS settings (read-only token).
+  if (config.exposure?.caddy) sources.caddy = () => collectCaddyShape({ http, cfg: config.exposure.caddy, now });
+  if (config.exposure?.cloudflare) {
+    sources.cloudflare = () => collectCloudflare({ http, cfg: config.exposure.cloudflare, token: requireCredential(credentials, "cloudflare.apiToken"), now,
+      ...(cloudflareBase ? { base: cloudflareBase, certSha256: cloudflareCertSha256 } : {}) });
+  }
 
   // The first vulnerability read waits for the first collection, so findings
   // are filed under machines the engine already knows.
@@ -131,8 +144,9 @@ export async function start({
 
   const cycleStaleMs = threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
   const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION, staleAfterMs: cycleStaleMs,
-    vulnStaleAfterMs: threshold(config, "vulnsRefreshMinutes") * threshold(config, "staleFactor") * 60_000, maxFeedAgeMs: feedMaxAgeMs, now });
-  const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now });
+    vulnStaleAfterMs: threshold(config, "vulnsRefreshMinutes") * threshold(config, "staleFactor") * 60_000, maxFeedAgeMs: feedMaxAgeMs, exposureConfigured: Boolean(config.exposure), now });
+  const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now,
+    findingContext: (target) => currentFindingContext(target, { findings, store, holds, now: now(), maxFeedAgeMs: feedMaxAgeMs }) });
   log(`API listening on ${config.listen.apiHost}:${api.port}; admin on ${config.listen.adminHost}:${admin.port} (only from ${config.listen.adminAllowIp}).`);
 
   const scheduler = schedule ? startScheduler({

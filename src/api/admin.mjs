@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 // owner header; changes must be same-origin JSON.
 const PAGE = readFileSync(new URL("./admin-page.html", import.meta.url), "utf8");
 const MAX_BODY = 64 * 1024;
-const SETTABLE = new Set(["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword"]);
+const SETTABLE = new Set(["proxmox.tokenSecret", "wazuh.password", "wazuh.indexerPassword", "cloudflare.apiToken"]);
 
 const stripV4Mapped = (ip) => String(ip ?? "").replace(/^::ffff:/u, "");
 
@@ -30,7 +30,7 @@ function readJson(req) {
   });
 }
 
-export function createAdminServer({ db, tenantId, holds, credentials, config, now = Date.now }) {
+export function createAdminServer({ db, tenantId, holds, credentials, config, findingContext = null, now = Date.now }) {
   const allowIp = config.listen.adminAllowIp;
   const owner = config.owner.authentikUser;
   const origin = config.owner.adminOrigin;
@@ -60,6 +60,20 @@ export function createAdminServer({ db, tenantId, holds, credentials, config, no
     if (p === "/admin/holds" && req.method === "GET") return send(res, 200, { items: holds.list(now()) });
     if (p === "/admin/holds" && req.method === "POST") {
       const b = await readJson(req);
+      if (b.kind === "acceptance") {
+        // The situation being accepted (KEV, exposure, gate) is read from the
+        // engine's current data, never taken from the request.
+        const target = { assetKey: b.assetKey, cve: b.cve, pkg: b.package, version: b.version };
+        if (![target.assetKey, target.cve, target.pkg, target.version].every((v) => typeof v === "string" && v)) return send(res, 400, { error: "an acceptance needs assetKey, cve, package and version" });
+        const context = findingContext ? findingContext(target) : null;
+        if (!context) return send(res, 400, { error: "no such finding on record for that machine, CVE, package and version" });
+        // An acceptance made while exposure is unknown would cover any later exposure.
+        if (context.exposure === "unknown") return send(res, 409, { error: "this finding's exposure can't be established right now, so the risk can't be judged; try again once the exposure map is current" });
+        try {
+          const id = holds.add({ kind: "acceptance", assetKey: target.assetKey, checkId: target.cve, product: target.pkg, version: target.version, reason: b.reason, expiresAt: b.expiresAt ?? null, context }, now());
+          return send(res, 201, { id, context });
+        } catch (e) { return send(res, 400, { error: e.message }); }
+      }
       try {
         const id = holds.add({ kind: b.kind, assetKey: b.assetKey, checkId: b.checkId ?? null, product: b.product ?? null, version: b.version ?? null, reason: b.reason, expiresAt: b.expiresAt ?? null }, now());
         return send(res, 201, { id });

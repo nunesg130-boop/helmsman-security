@@ -23,7 +23,7 @@ export const INVENTORY_KEY = "_inventory";
 export const HOST_CLASSES = Object.freeze(["host", "guest", "roaming", "appliance"]);
 
 export function evidenceKey(asset, kind) {
-  if (kind.startsWith("eol.")) return GLOBAL_KEY;
+  if (kind.startsWith("eol.") || kind.startsWith("exposure.")) return GLOBAL_KEY;
   if (kind.startsWith("inventory.")) return INVENTORY_KEY;
   if (kind.startsWith("wazuh.")) {
     const id = asset.sources?.wazuh?.id;
@@ -32,7 +32,7 @@ export function evidenceKey(asset, kind) {
   return asset.assetKey;
 }
 
-function usable(store, asset, kind, now) {
+export function usable(store, asset, kind, now) {
   const key = evidenceKey(asset, kind);
   const ev = key ? store.get(key, kind) : null;
   if (!ev) return { problem: `no ${kind} evidence` };
