@@ -24,6 +24,7 @@ import { refreshThreatFeeds } from "./collectors/threat-feeds.mjs";
 import { FindingStore } from "./vuln/findings.mjs";
 import { vulnCycle } from "./vuln/cycle.mjs";
 import { currentFindingContext } from "./vuln/annotate.mjs";
+import { imagesCycle } from "./images/cycle.mjs";
 import { threshold } from "./checks/thresholds.mjs";
 import { startScheduler } from "./scheduler.mjs";
 import { createPublicServer } from "./api/public.mjs";
@@ -131,6 +132,9 @@ export async function start({
     }
     return vulnCycle({ db, tenantId, store, findings, indexer, config, now, secrets: secretValues() });
   };
+  // Container images: queue scans for the separate scanner worker and read its results.
+  const imagesCfg = config.images?.enabled ? config.images : null;
+  const collectImages = async () => (imagesCfg ? imagesCycle({ db, tenantId, store, findings, config, now, secrets: secretValues() }) : { status: "not_configured" });
   const feedMaxAgeMs = threshold(config, "threatFeedMaxAgeDays") * 86400_000;
   const refreshFeeds = async () => {
     if (!indexerCfg) return { status: "not_configured" };
@@ -144,7 +148,7 @@ export async function start({
 
   const cycleStaleMs = threshold(config, "collectMinutes") * threshold(config, "staleFactor") * 60_000;
   const api = await createPublicServer({ db, tenantId, store, credentials, tls, host: config.listen.apiHost, port: config.listen.apiPort, version: VERSION, staleAfterMs: cycleStaleMs,
-    vulnStaleAfterMs: threshold(config, "vulnsRefreshMinutes") * threshold(config, "staleFactor") * 60_000, maxFeedAgeMs: feedMaxAgeMs, exposureConfigured: Boolean(config.exposure), now });
+    vulnStaleAfterMs: threshold(config, "vulnsRefreshMinutes") * threshold(config, "staleFactor") * 60_000, maxFeedAgeMs: feedMaxAgeMs, exposureConfigured: Boolean(config.exposure), imagesConfigured: Boolean(config.images?.enabled), now });
   const admin = await createAdminServer({ db, tenantId, holds, credentials, config, now,
     findingContext: (target) => currentFindingContext(target, { findings, store, holds, now: now(), maxFeedAgeMs: feedMaxAgeMs }) });
   log(`API listening on ${config.listen.apiHost}:${api.port}; admin on ${config.listen.adminHost}:${admin.port} (only from ${config.listen.adminAllowIp}).`);
@@ -153,6 +157,7 @@ export async function start({
     tasks: [
       { name: "eol", everyMs: threshold(config, "eolRefreshHours") * 3600_000, run: refreshEol },
       { name: "collect", everyMs: threshold(config, "collectMinutes") * 60_000, run: collect },
+      ...(imagesCfg ? [{ name: "images", everyMs: threshold(config, "collectMinutes") * 60_000, run: async () => { await firstCollect; return collectImages(); } }] : []),
       ...(indexerCfg ? [
         // A failed feed or vulnerability read is retried after 10 minutes
         // (e.g. the internet wasn't up yet after a power cut).
@@ -173,7 +178,7 @@ export async function start({
     db.close();
   }
 
-  return { config, db, store, ledger, credentials, apiPort: api.port, adminPort: admin.port, collect, refreshEol, collectVulns, refreshFeeds, findings, scheduledTasks: schedule ? ['eol', 'collect', ...(indexerCfg ? ['threat-feeds', 'vulns'] : [])] : [], stop };
+  return { config, db, store, ledger, credentials, apiPort: api.port, adminPort: admin.port, collect, refreshEol, collectVulns, refreshFeeds, collectImages, findings, scheduledTasks: schedule ? ['eol', 'collect', ...(imagesCfg ? ['images'] : []), ...(indexerCfg ? ['threat-feeds', 'vulns'] : [])] : [], stop };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

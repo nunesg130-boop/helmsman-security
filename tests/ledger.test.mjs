@@ -16,9 +16,9 @@ import { proxmoxRoutes, T } from "./fixtures/proxmox-fixture.mjs";
 import { wazuhRoutes } from "./fixtures/wazuh-fixture.mjs";
 import { readFileSync } from "node:fs";
 
-test("CHECKS has 15 unique ids including collector_coverage", () => {
-  assert.equal(CHECKS.length, 15);
-  assert.equal(new Set(CHECKS.map((c) => c.id)).size, 15);
+test("CHECKS has 16 unique ids including collector_coverage", () => {
+  assert.equal(CHECKS.length, 16);
+  assert.equal(new Set(CHECKS.map((c) => c.id)).size, 16);
   assert.ok(CHECKS.some((c) => c.id === "collector_coverage"));
 });
 

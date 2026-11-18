@@ -95,8 +95,8 @@ test("a version 2 database migrates to version 3 with its holds kept, and accept
     PRAGMA user_version = 2;`);
   raw.close();
   const db = openDb(file);
-  assert.equal(SCHEMA_VERSION, 3);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 3);
+  assert.ok(SCHEMA_VERSION >= 3);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, SCHEMA_VERSION);
   assert.deepEqual({ ...db.prepare("SELECT id, kind, asset_key, check_id, reason, expires_at, created_at, context_json FROM holds").get() },
     { id: 7, kind: "exclusion", asset_key: "pve:guest:1", check_id: "*", reason: "lab toy", expires_at: 99, created_at: 5, context_json: null });
   db.prepare("INSERT INTO holds (tenant_id, kind, asset_key, check_id, product, version, reason, created_at, context_json) VALUES ('default','acceptance','a','CVE-1','p','1','ok',1,'{}')").run();

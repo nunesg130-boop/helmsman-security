@@ -29,7 +29,7 @@ const MAP = {
   declaredAddresses: { "pve:guest:110": ["192.168.0.2"] }
 };
 
-async function setup({ map = MAP, mapAt = Date.now(), failExposure = false, kev = true, uncovered = 0, configured = true } = {}) {
+async function setup({ map = MAP, mapAt = Date.now(), failExposure = false, kev = true, uncovered = 0, configured = true, imageRows = [] } = {}) {
   const now = Date.now();
   const db = openDb(":memory:");
   const store = new EvidenceStore(db, "default");
@@ -39,7 +39,8 @@ async function setup({ map = MAP, mapAt = Date.now(), failExposure = false, kev 
   credentials.set("cloudflare.apiToken", CF_TOKEN, 1);
   const names = { "pve:guest:100": "Jelly-Arr", "pve:guest:109": "docker-apps", "pve:guest:201": "docker-auth", "pve:guest:110": "pihole", "pve:guest:111": "extra" };
   for (const [key, name] of Object.entries(names)) db.prepare("INSERT INTO assets (tenant_id, asset_key, class, name, sources_json, last_seen_at) VALUES ('default', ?, 'guest', ?, '{}', ?)").run(key, name, now);
-  new LedgerStore(db, "default").write(Object.keys(names).map((assetKey, i) => ({ assetKey, checkId: "vuln_coverage_host", state: i < uncovered ? "unknown" : "ok", reason: "x", evidence: [], roaming: false })), now);
+  new LedgerStore(db, "default").write([...Object.keys(names).map((assetKey, i) => ({ assetKey, checkId: "vuln_coverage_host", state: i < uncovered ? "unknown" : "ok", reason: "x", evidence: [], roaming: false })),
+    ...imageRows.map(([assetKey, state]) => ({ assetKey, checkId: "vuln_coverage_images", state, reason: "x", evidence: [], roaming: false }))], now);
   const f = new FindingStore(db, "default");
   const mk = (assetKey, cve, name, over = {}) => ({ assetKey, cve, pkg: { name, version: "1.0", arch: "amd64", type: "deb" }, severity: "high", cvss: 7.5, fixState: FIX, fixedVersion: "1.1", lowConfidence: false, condition: "Package less than 1.1", recognisedCondition: true, detectedAt: 1, ...over });
   f.replaceSource("wazuh", [
@@ -142,7 +143,7 @@ test("GET /api/v1/exposure without a usable map says so and gives no lists", asy
 test("GET /api/v1/posture gives both scenarios, the rule versions and named deductions", () => using({}, async (port) => {
   const { status, body } = await req(port, "/api/v1/posture");
   assert.equal(status, 200);
-  assert.deepEqual(body.rules, { urgency: 1, score: 1 });
+  assert.deepEqual(body.rules, { urgency: 2, score: 1 });
   // Jelly-Arr: kernel 10 + jellyfin 3 + openssl 3 = 16 (pessimistic 23); docker-apps 0.5; docker-auth 10; pihole 3; stray 3 (pessimistic 10).
   assert.deepEqual([body.state, body.confirmed, body.pessimistic], ["scored", 67.5, 53.5]);
   assert.deepEqual(body.coverage, { inScope: 5, withoutFreshCoverage: 0 });
@@ -183,3 +184,12 @@ test("an out-of-date KEV list refuses the urgent list instead of quietly leaving
   assert.equal(r.status, 409);
   assert.match(r.body.error, /KEV/u);
 }));
+
+test("image coverage counts toward the score's coverage limit", async () => {
+  await using({ imageRows: [["pve:guest:201", "unknown"], ["pve:guest:109", "unknown"], ["pve:guest:100", "ok"]] }, async (port) => {
+    const p = (await req(port, "/api/v1/posture")).body;
+    assert.deepEqual(p.coverage, { inScope: 8, withoutFreshCoverage: 2 });
+    assert.equal(p.state, "incomplete");
+  });
+  await using({ imageRows: [["pve:guest:201", "not_applicable"], ["pve:guest:100", "ok"]] }, async (port) => assert.deepEqual((await req(port, "/api/v1/posture")).body.coverage, { inScope: 6, withoutFreshCoverage: 0 }));
+});

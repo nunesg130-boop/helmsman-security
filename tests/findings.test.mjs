@@ -88,7 +88,7 @@ test("summaryByAsset counts severities, fix states and KEV per asset", () => {
   s.replaceKev(kevRows(1, [{ cve: "CVE-2", dateAdded: "2026-01-01", ransomware: false }]), 1000);
   s.replaceEpss([{ cve: "CVE-1", score: 0.5, percentile: 0.5 }], 1000);
   const rows = s.summaryByAsset(AGE);
-  assert.deepEqual(rows.find((r) => r.assetKey === "pve:guest:100"), { assetKey: "pve:guest:100", total: 4, critical: 1, high: 1, medium: 1, low: 0, unknownSeverity: 1, fixAvailable: 2, noFix: 1, fixUnknown: 1, kev: 1, lowConfidence: 1, unrecognisedCondition: 1 });
+  assert.deepEqual(rows.find((r) => r.assetKey === "pve:guest:100"), { assetKey: "pve:guest:100", total: 4, critical: 1, high: 1, medium: 1, low: 0, unknownSeverity: 1, fixAvailable: 2, noFix: 1, fixUnknown: 1, kev: 1, lowConfidence: 1, unrecognisedCondition: 1, hostFindings: 4, imageFindings: 0 });
   assert.equal(s.summaryByAsset({ now: 5000, maxFeedAgeMs: 10 })[0].kev, null);
 });
 
@@ -100,4 +100,12 @@ test("a failed replaceEpss (bad row) leaves the previous table intact", () => {
   s.replaceSource("wazuh", [f("CVE-1")], 1000);
   s.replaceKev(kevRows(1), 1000);
   assert.equal(s.list({}, AGE).items[0].epss, 0.42);
+});
+test("a finding with no CVE id has KEV status unknown, not 'not exploited'", () => {
+  const f = new FindingStore(openDb(":memory:"), "default");
+  f.replaceSource("grype", [{ assetKey: "a", container: "c", cve: "GHSA-aaaa-bbbb-cccc", pkg: { name: "x", version: "1", arch: "" }, severity: "high", fixState: "unknown" }], 1);
+  f.replaceKev([{ cve: "CVE-2026-1" }], 1);
+  const [item] = f.list({}, { now: 1, maxFeedAgeMs: 86400_000 }).items;
+  assert.equal(item.kev, null);
+  assert.equal(f.list({ kev: false }, { now: 1, maxFeedAgeMs: 86400_000 }).total, 0, "not listed as known not-exploited either");
 });

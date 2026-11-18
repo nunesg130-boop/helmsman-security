@@ -1,0 +1,27 @@
+[Unit]
+Description=Container image scanner for helmsman-security (Grype + Syft)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hs-grype
+Group=hs-grype
+ExecStart=/usr/bin/node --no-warnings /opt/helmsman-security/src/images/worker-main.mjs
+Restart=on-failure
+RestartSec=30
+Nice=10
+MemoryMax=1536M
+# A scanner killed for memory is recorded as a failed scan, not restarted in a loop.
+OOMPolicy=continue
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/hs-grype/out /var/lib/hs-grype/db /var/lib/hs-grype/tmp /var/lib/hs-grype/home
+InaccessiblePaths=/var/lib/helmsman-security /etc/helmsman-security
+CapabilityBoundingSet=
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -108,7 +108,7 @@ test("the Wazuh collector records completeness only after a full read", async ()
 });
 test("the Docker collector records completeness only for a well-formed list", async () => {
   const run = async (body) => {
-    const srv = await startFixtureServer({ "/containers/json": body, "/version": { Version: "27", ApiVersion: "1.47" } }, { tls: false });
+    const srv = await startFixtureServer({ "/containers/json": body, "/images/json": [], "/version": { Version: "27", ApiVersion: "1.47" } }, { tls: false });
     try { return await collectDocker({ http: createHttp({ allowHttpHosts: ["127.0.0.1"] }), hosts: [{ name: "d", baseUrl: srv.url, assetKey: "pve:guest:109" }], now: () => 1000 }); } finally { await srv.close(); }
   };
   const good = await run([{ Names: ["/a"], State: "running", Ports: [] }]);

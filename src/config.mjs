@@ -41,7 +41,8 @@ export function parseConfig(raw) {
     eol: { products: ["debian", "ubuntu", "fedora", "macos", "proxmox-ve", "docker-engine"], software: DEFAULT_SOFTWARE, ...(raw.eol ?? {}) },
     assets: { roaming: [], appliances: [], addresses: {}, ...(raw.assets ?? {}) },
     network: raw.network ?? [],
-    exposure: raw.exposure ?? null
+    exposure: raw.exposure ?? null,
+    images: raw.images ?? null
   };
   need(isStr(c.tenant), "tenant must be a string");
   for (const [k, v] of Object.entries(c.thresholds)) need(Number.isFinite(v) && v >= 0, `thresholds.${k} must be a non-negative number`);
@@ -104,6 +105,14 @@ export function parseConfig(raw) {
     }
     e.expectedPrivate = e.expectedPrivate ?? [];
     need(Array.isArray(e.expectedPrivate) && e.expectedPrivate.every(isStr), "exposure.expectedPrivate must be a list of hostnames");
+  }
+  if (c.images != null) {
+    need(typeof c.images === "object" && !Array.isArray(c.images), "images must be an object");
+    c.images = { spoolDir: "/var/lib/hs-grype/spool", outDir: "/var/lib/hs-grype/out", platform: "linux/amd64", dbMaxAgeDays: 5, resultMaxAgeDays: 7, dockerHubPullsPerHour: 8, ...c.images };
+    need(typeof c.images.enabled === "boolean", "images.enabled must be true or false");
+    for (const k of ["spoolDir", "outDir"]) need(isStr(c.images[k]) && c.images[k].startsWith("/"), `images.${k} must be an absolute path`);
+    need(/^[a-z0-9]+\/[a-z0-9]+$/u.test(c.images.platform), "images.platform must look like linux/amd64");
+    for (const k of ["dbMaxAgeDays", "resultMaxAgeDays", "dockerHubPullsPerHour"]) need(Number.isFinite(c.images[k]) && c.images[k] > 0, `images.${k} must be a positive number`);
   }
   need(Array.isArray(c.eol.products) && c.eol.products.every(isStr), "eol.products must be a list of product slugs");
   need(Array.isArray(c.assets.roaming) && Array.isArray(c.assets.appliances), "assets.roaming and assets.appliances must be lists");
