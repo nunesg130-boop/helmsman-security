@@ -143,7 +143,7 @@ test("GET /api/v1/exposure without a usable map says so and gives no lists", asy
 test("GET /api/v1/posture gives both scenarios, the rule versions and named deductions", () => using({}, async (port) => {
   const { status, body } = await req(port, "/api/v1/posture");
   assert.equal(status, 200);
-  assert.deepEqual(body.rules, { urgency: 1, score: 1 });
+  assert.deepEqual(body.rules, { urgency: 2, score: 1 });
   // Jelly-Arr: kernel 10 + jellyfin 3 + openssl 3 = 16 (pessimistic 23); docker-apps 0.5; docker-auth 10; pihole 3; stray 3 (pessimistic 10).
   assert.deepEqual([body.state, body.confirmed, body.pessimistic], ["scored", 67.5, 53.5]);
   assert.deepEqual(body.coverage, { inScope: 5, withoutFreshCoverage: 0 });

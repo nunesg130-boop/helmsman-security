@@ -49,7 +49,7 @@ never below 0.
 Machine A: 13.5 confirmed, 20.5 pessimistic. Machine B: 0 and 10.
 Result: **86.5 based on confirmed findings; 69.5 in the pessimistic case**.
 
-## What "urgent" means (urgency rules version 1)
+## What "urgent" means (urgency rules version 2)
 
 A finding is urgent when its software is:
 
@@ -58,6 +58,8 @@ A finding is urgent when its software is:
   available; or
 - on a machine reachable from the internet (behind a route, behind a login
   gate, or forwarded to directly) **and** actively exploited.
+
+For a vulnerability inside a container image, "internet-facing" is confirmed when a public route lands on that container (the container publishes the port the route points at): it is service-exposed, or gated behind a verified login. Other containers on the same machine are only machine-reachable. Version 2 added this; version 1 judged only host packages.
 
 Only exposure established from routes and only verified login gates count.
 Missing or out-of-date inputs make urgency *unknown*, never "not urgent".

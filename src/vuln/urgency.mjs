@@ -4,7 +4,9 @@
 // What is confirmed (from routes) and what is only likely (a package that
 // seems to be the one serving a route) are separate fields; the heuristic
 // never upgrades or suppresses the confirmed answer.
-export const URGENCY_RULES = 1;
+// v2 (phase 2C): findings inside a container a route lands on get confirmed
+// service or gated exposure; the rule itself is unchanged.
+export const URGENCY_RULES = 2;
 
 const VERIFIED = new Set(["authentik", "cloudflare-access", "verified-mixed"]);
 const GATE_WEAKNESS = { none: 2, unknown: 1 };
@@ -22,6 +24,15 @@ export function findingExposure(finding, machine, services = []) {
   if (machine.exposure === "lan") return out("none", "route");
   if (machine.role === "entry" || machine.role === "gate") return out("service", "route", { gate: "none" });
   if (machine.role === "direct") return out("host", "route", { possible: "service" });
+
+  // A container finding: the route's own listener evidence names the
+  // container, so its exposure is confirmed, not guessed.
+  if (finding?.container) {
+    const hits = (machine.services ?? []).map((i) => services[i]).filter((s) => s && s.exposure !== "lan" && s.container === finding.container);
+    if (!hits.length) return out("host", "route");
+    const weakest = hits.reduce((a, b) => ((GATE_WEAKNESS[b.gate] ?? 0) > (GATE_WEAKNESS[a.gate] ?? 0) ? b : a));
+    return out(VERIFIED.has(weakest.gate) ? "gated" : "service", "route", { gate: weakest.gate, via: weakest.hostname });
+  }
 
   // An app machine: the machine is reachable, but which package answers the
   // route is an inference from the listening process name.
