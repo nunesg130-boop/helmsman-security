@@ -185,7 +185,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       const exposure = readExposureMap(store, t);
       const all = annotateFindings(findings.list({ limit: ALL, offset: 0 }, { now: t, maxFeedAgeMs }).items, { map: exposure.map, holds, now: t });
       // In scope: every machine the vulnerability coverage check applies to.
-      const coverageRows = rowsNow().filter((r) => r.checkId === "vuln_coverage_host" && r.state !== "not_applicable" && r.state !== "excluded");
+      const coverageRows = rowsNow().filter((r) => ["vuln_coverage_host", "vuln_coverage_images"].includes(r.checkId) && r.state !== "not_applicable" && r.state !== "excluded");
       const score = postureScore({
         findings: all,
         coverage: { inScope: coverageRows.length, withoutFreshCoverage: coverageRows.filter((r) => r.state !== "ok").length },

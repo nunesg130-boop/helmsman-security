@@ -63,3 +63,52 @@ test("a whole-machine exclusion covers vuln_coverage_host", async () => {
   holds.add({ kind: "exclusion", assetKey: asset.assetKey, checkId: "*", reason: "test VM" }, NOW);
   assert.equal(run(store(), asset, CONFIG, holds).state, "excluded");
 });
+
+// --- container image coverage ---
+import { vulnCoverageImages } from "../src/checks/vuln.mjs";
+const ICONF = { images: { enabled: true } };
+const dockerHost = { assetKey: "pve:guest:201", class: "guest", name: "docker-auth", sources: { wazuh: { id: "007" }, docker: { name: "docker-auth" } } };
+const plainHost = { assetKey: "pve:guest:151", class: "guest", name: "Kasm", sources: { wazuh: { id: "020" } } };
+const img = (container, status, reason = null, extra = {}) => ({ container, imageRef: `${container}:1`, repo: `ghcr.io/x/${container}`, digest: "sha256:1", status, reason, findings: 3, ...extra });
+function istore({ images = [img("a", "scanned"), img("b", "scanned")], listing = "ok", db = { built: "x", status: "ok", stale: false, reason: null }, packages = ["bash"] } = {}) {
+  const s = memoryStore();
+  putOk(s, "grype-images", [{ assetKey: "pve:guest:201", kind: "grype.images", value: { listing, images } }, { assetKey: "_global", kind: "grype.db", value: db }], NOW);
+  putOk(s, "wazuh", [{ assetKey: "wazuh:agent:020", kind: "wazuh.packages", value: { items: packages.map((name) => ({ name, version: "1" })), scanned: true } }], NOW);
+  return s;
+}
+const irun = (s, a = dockerHost, config = ICONF, holds = noHolds) => runCheck(vulnCoverageImages, a, { store: s, holds, config, now: NOW });
+
+test("image coverage is registered and only applies when image scanning is enabled", () => {
+  assert.ok(CHECKS.includes(vulnCoverageImages));
+  assert.equal(irun(istore(), dockerHost, {}).state, "not_applicable");
+});
+test("every running image scanned and current is ok, with counts", () => {
+  const r = irun(istore());
+  assert.deepEqual([r.state, r.reason], ["ok", "2 images scanned, 6 findings"]);
+});
+test("pending, local and failed images make coverage unknown, each named with its reason", () => {
+  const r = irun(istore({ images: [img("a", "scanned"), img("b", "pending", "not scanned yet"), img("site", "local", "built locally, no registry digest", { repo: null, imageRef: "palmetto-site:latest" }), img("c", "failed", "pull-denied")] }));
+  assert.equal(r.state, "unknown");
+  for (const part of [/b \(not scanned yet\)/u, /site \(built locally, no registry digest\)/u, /c \(pull-denied\)/u]) assert.match(r.reason, part);
+});
+test("a per-image exclusion takes that image out of the unknowns and names it", async () => {
+  const { openDb } = await import("../src/db.mjs");
+  const holds = new HoldStore(openDb(":memory:"), "default");
+  holds.add({ kind: "exclusion", assetKey: dockerHost.assetKey, checkId: "image:palmetto-site", reason: "my own build" }, NOW);
+  const r = irun(istore({ images: [img("a", "scanned"), img("site", "local", "built locally, no registry digest", { repo: null, imageRef: "palmetto-site:latest" })] }), dockerHost, ICONF, holds);
+  assert.deepEqual([r.state, r.reason], ["ok", "1 image scanned, 3 findings; excluded: site (my own build)"]);
+});
+test("a missing or stale container list, or no scanner database, is unknown", () => {
+  assert.match(irun(istore({ listing: "missing", images: [] })).reason, /container list/u);
+  assert.match(irun(istore({ listing: "stale" })).reason, /container list is out of date/u);
+  assert.equal(irun(istore({ listing: "stale" })).state, "unknown");
+  const r = irun(istore({ db: { built: null, status: "missing", stale: true, reason: "the scanner hasn't reported a vulnerability database" } }));
+  assert.equal(r.state, "unknown");
+  assert.match(r.reason, /vulnerability database/u);
+});
+test("a host with no running containers is ok, saying so", () => assert.deepEqual([irun(istore({ images: [] })).state, irun(istore({ images: [] })).reason], ["ok", "no running containers"]));
+test("a machine with Docker installed but no read-only gate is unknown; one without Docker doesn't apply", () => {
+  const kasm = irun(istore({ packages: ["docker-ce", "bash"] }), plainHost);
+  assert.deepEqual([kasm.state, kasm.reason], ["unknown", "Docker is installed but has no read-only gate; its images can't be listed"]);
+  assert.equal(irun(istore({ packages: ["bash"] }), plainHost).state, "not_applicable");
+});
