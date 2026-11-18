@@ -137,3 +137,12 @@ test("assets.addresses declares IPv4 addresses for machines the engine can't lea
     assert.throws(() => parse({ ...base, assets: { addresses: bad } }), /assets\.addresses/u);
   }
 });
+test("images config: defaults, absolute paths, positive limits", async () => {
+  const { parseConfig: parse } = await import("../src/config.mjs");
+  const base = { listen: { adminAllowIp: "192.168.0.105" }, owner: { authentikUser: "o" } };
+  assert.equal(parse(base).images, null);
+  assert.deepEqual(parse({ ...base, images: { enabled: true } }).images, { enabled: true, spoolDir: "/var/lib/hs-grype/spool", outDir: "/var/lib/hs-grype/out", platform: "linux/amd64", dbMaxAgeDays: 5, resultMaxAgeDays: 7, dockerHubPullsPerHour: 8 });
+  assert.throws(() => parse({ ...base, images: { enabled: true, spoolDir: "spool" } }), /images\.spoolDir/u);
+  assert.throws(() => parse({ ...base, images: { enabled: true, dbMaxAgeDays: 0 } }), /images\.dbMaxAgeDays/u);
+  assert.throws(() => parse({ ...base, images: { enabled: "yes" } }), /images\.enabled/u);
+});

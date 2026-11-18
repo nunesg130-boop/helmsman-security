@@ -152,6 +152,41 @@ const MIGRATIONS = [
     SELECT id, tenant_id, kind, asset_key, check_id, product, version, reason, expires_at, created_at FROM holds;
   DROP TABLE holds;
   ALTER TABLE holds_v3 RENAME TO holds;
+  `,
+  // v4: container image findings carry their container and image; two
+  // containers from one image on one host are separate rows.
+  `
+  CREATE TABLE findings_v4 (
+    tenant_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    asset_key TEXT NOT NULL,
+    container TEXT NOT NULL DEFAULT '',
+    image TEXT,
+    cve TEXT NOT NULL,
+    pkg_name TEXT NOT NULL,
+    pkg_version TEXT NOT NULL,
+    pkg_arch TEXT NOT NULL,
+    pkg_type TEXT,
+    severity TEXT NOT NULL,
+    cvss REAL,
+    fix_state TEXT NOT NULL CHECK (fix_state IN ('fix-available-not-applied','no-fix-exists','unknown')),
+    fixed_version TEXT,
+    low_confidence INTEGER NOT NULL DEFAULT 0,
+    condition TEXT,
+    recognised_condition INTEGER NOT NULL DEFAULT 0,
+    detected_at INTEGER,
+    first_seen_at INTEGER NOT NULL,
+    last_confirmed_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, source, asset_key, container, cve, pkg_name, pkg_version, pkg_arch)
+  );
+  INSERT INTO findings_v4 (tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch, pkg_type, severity, cvss, fix_state, fixed_version,
+      low_confidence, condition, recognised_condition, detected_at, first_seen_at, last_confirmed_at)
+    SELECT tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch, pkg_type, severity, cvss, fix_state, fixed_version,
+      low_confidence, condition, recognised_condition, detected_at, first_seen_at, last_confirmed_at FROM findings;
+  DROP TABLE findings;
+  ALTER TABLE findings_v4 RENAME TO findings;
+  CREATE INDEX findings_by_asset ON findings (tenant_id, asset_key);
+  CREATE INDEX findings_by_cve ON findings (tenant_id, cve);
   `
 ];
 

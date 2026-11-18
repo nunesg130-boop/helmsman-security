@@ -58,3 +58,26 @@ test("a version 1 database is migrated to the current schema with its data kept"
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM findings").get().n, 0);
   db.close();
 });
+test("a version 3 database migrates to version 4 keeping findings, with per-container rows possible", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const file = tmp();
+  openDb(file).close();
+  const raw = new DatabaseSync(file);
+  raw.exec(`DROP TABLE findings;
+    CREATE TABLE findings (tenant_id TEXT NOT NULL, source TEXT NOT NULL, asset_key TEXT NOT NULL, cve TEXT NOT NULL, pkg_name TEXT NOT NULL, pkg_version TEXT NOT NULL, pkg_arch TEXT NOT NULL,
+      pkg_type TEXT, severity TEXT NOT NULL, cvss REAL, fix_state TEXT NOT NULL, fixed_version TEXT, low_confidence INTEGER NOT NULL DEFAULT 0, condition TEXT,
+      recognised_condition INTEGER NOT NULL DEFAULT 0, detected_at INTEGER, first_seen_at INTEGER NOT NULL, last_confirmed_at INTEGER NOT NULL,
+      PRIMARY KEY (tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch));
+    INSERT INTO findings VALUES ('default','wazuh','pve:guest:100','CVE-1','openssl','3','amd64','deb','high',7.5,'unknown',NULL,0,NULL,0,NULL,1,2);
+    PRAGMA user_version = 3;`);
+  raw.close();
+  const db = openDb(file);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, SCHEMA_VERSION);
+  assert.ok(SCHEMA_VERSION >= 4);
+  const row = db.prepare("SELECT cve, container, image, first_seen_at FROM findings").get();
+  assert.deepEqual({ ...row }, { cve: "CVE-1", container: "", image: null, first_seen_at: 1 });
+  const ins = db.prepare("INSERT INTO findings (tenant_id, source, asset_key, container, image, cve, pkg_name, pkg_version, pkg_arch, severity, fix_state, first_seen_at, last_confirmed_at) VALUES ('default','grype','pve:guest:201',?,'ghcr.io/goauthentik/server','CVE-2','libx','1','','high','unknown',1,1)");
+  ins.run("authentik-server-1"); ins.run("authentik-worker-1");
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM findings WHERE source = 'grype'").get().n, 2);
+  db.close();
+});

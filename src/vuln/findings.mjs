@@ -21,11 +21,11 @@ export class FindingStore {
   // Pass { transaction: false } when the caller already holds a transaction.
   replaceSource(source, findings, now, { transaction = true } = {}) {
     const upsert = this.db.prepare(
-      `INSERT INTO findings (tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch, pkg_type, severity, cvss, fix_state, fixed_version,
+      `INSERT INTO findings (tenant_id, source, asset_key, container, image, cve, pkg_name, pkg_version, pkg_arch, pkg_type, severity, cvss, fix_state, fixed_version,
          low_confidence, condition, recognised_condition, detected_at, first_seen_at, last_confirmed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (tenant_id, source, asset_key, cve, pkg_name, pkg_version, pkg_arch) DO UPDATE SET
-         pkg_type = excluded.pkg_type, severity = excluded.severity, cvss = excluded.cvss, fix_state = excluded.fix_state,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (tenant_id, source, asset_key, container, cve, pkg_name, pkg_version, pkg_arch) DO UPDATE SET
+         image = excluded.image, pkg_type = excluded.pkg_type, severity = excluded.severity, cvss = excluded.cvss, fix_state = excluded.fix_state,
          fixed_version = excluded.fixed_version, low_confidence = excluded.low_confidence, condition = excluded.condition,
          recognised_condition = excluded.recognised_condition, detected_at = excluded.detected_at, last_confirmed_at = excluded.last_confirmed_at`
     );
@@ -37,7 +37,7 @@ export class FindingStore {
         for (const [k, v] of Object.entries({ assetKey: f.assetKey, cve: f.cve, package: f.pkg?.name })) {
           if (typeof v !== "string" || !v) throw new TypeError(`finding ${k} is required`);
         }
-        upsert.run(this.tenantId, source, f.assetKey, f.cve, f.pkg.name, String(f.pkg.version ?? ""), String(f.pkg.arch ?? ""), f.pkg.type ?? null,
+        upsert.run(this.tenantId, source, f.assetKey, String(f.container ?? ""), f.image ?? null, f.cve, f.pkg.name, String(f.pkg.version ?? ""), String(f.pkg.arch ?? ""), f.pkg.type ?? null,
           f.severity, Number.isFinite(f.cvss) ? f.cvss : null, f.fixState, f.fixedVersion ?? null, f.lowConfidence ? 1 : 0, f.condition ?? null,
           f.recognisedCondition ? 1 : 0, Number.isFinite(f.detectedAt) ? f.detectedAt : null, now, now);
       }
@@ -106,11 +106,11 @@ export class FindingStore {
       LEFT JOIN epss e ON e.tenant_id = f.tenant_id AND e.cve = f.cve
       WHERE ${where.join(" AND ")}`;
     const total = this.db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params).n;
-    const order = `${kevFresh ? "(k.cve IS NOT NULL) DESC, " : ""}(f.cvss IS NULL), f.cvss DESC, f.cve, f.asset_key, f.pkg_name`;
+    const order = `${kevFresh ? "(k.cve IS NOT NULL) DESC, " : ""}(f.cvss IS NULL), f.cvss DESC, f.cve, f.asset_key, f.container, f.pkg_name`;
     const rows = this.db.prepare(`SELECT f.*, k.cve AS kev_cve, k.ransomware AS kev_ransomware, e.score AS epss_score ${from} ORDER BY ${order} LIMIT ? OFFSET ?`)
       .all(...params, Math.max(1, limit), Math.max(0, offset));
     const items = rows.map((r) => ({
-      source: r.source, assetKey: r.asset_key, cve: r.cve,
+      source: r.source, assetKey: r.asset_key, container: r.container || null, image: r.image ?? null, cve: r.cve,
       pkg: { name: r.pkg_name, version: r.pkg_version, arch: r.pkg_arch, type: r.pkg_type },
       severity: r.severity, cvss: r.cvss, fixState: r.fix_state, fixedVersion: r.fixed_version, lowConfidence: r.low_confidence === 1,
       detectedAt: r.detected_at, firstSeenAt: r.first_seen_at, lastConfirmedAt: r.last_confirmed_at,

@@ -12,5 +12,6 @@
     "cloudflare": { "accountId": "<account id>", "zoneId": "<zone id>", "tunnelIds": ["<tunnel id>"], "assetKey": "pve:guest:108", "connectorAddress": "192.168.0.108" },
     "expectedPrivate": ["security.example.com"]
   },
+  "images": { "enabled": true },
   "thresholds": { "backupMaxAgeDays": 2 }
 }
