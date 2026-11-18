@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+// Test stand-in for grype: db update / db status / scanning an SBOM file.
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+const home = process.env.HOME;
+const args = process.argv.slice(2);
+appendFileSync(`${home}/fake-calls.log`, `grype ${args.join(" ")}\n`);
+writeFileSync(`${home}/fake-env-grype.json`, JSON.stringify(process.env));
+const built = existsSync(`${home}/fake-db-built`) ? readFileSync(`${home}/fake-db-built`, "utf8").trim() : "2026-11-17T04:00:00Z";
+if (args[0] === "db" && args[1] === "update") {
+  if (existsSync(`${home}/fake-db-fail`)) { process.stderr.write("failed to download database\n"); process.exit(1); }
+  process.exit(0);
+}
+if (args[0] === "db" && args[1] === "status") { process.stdout.write(JSON.stringify({ schemaVersion: "v6.1.0", built, valid: true, path: "/x" })); process.exit(0); }
+if (String(args[0]).startsWith("sbom:")) {
+  const sbom = JSON.parse(readFileSync(args[0].slice(5), "utf8"));
+  const out = args[args.indexOf("--file") + 1];
+  writeFileSync(out, JSON.stringify({
+    matches: [{
+      vulnerability: { id: "GHSA-abcd-efgh-ijkl", severity: "High", cvss: [{ version: "3.1", metrics: { baseScore: 7.5 } }], fix: { state: "fixed", versions: ["1.2"] } },
+      relatedVulnerabilities: [{ id: "CVE-2026-1001" }],
+      matchDetails: [{ type: "exact-direct-match" }],
+      artifact: { name: sbom.artifacts[0].name, version: sbom.artifacts[0].version, type: "apk", purl: "pkg:apk/alpine/openssl@1.1" }
+    }],
+    descriptor: { name: "grype", version: "0.122.0" }
+  }));
+  process.exit(0);
+}
+process.stderr.write(`unexpected ${args.join(" ")}\n`); process.exit(2);

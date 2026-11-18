@@ -1,0 +1,22 @@
+#!/usr/bin/env node
+// Test stand-in for syft. Behaviour is chosen by words in the image reference.
+import { writeFileSync, appendFileSync } from "node:fs";
+import net from "node:net";
+const home = process.env.HOME;
+appendFileSync(`${home}/fake-calls.log`, `syft ${process.argv.slice(2).join(" ")}\n`);
+writeFileSync(`${home}/fake-env-syft.json`, JSON.stringify(process.env));
+const src = process.argv[2] ?? "";
+const out = (process.argv[process.argv.indexOf("-o") + 1] ?? "").replace(/^syft-json=/u, "");
+const fail = (msg) => { process.stderr.write(`${msg}\n`); process.exit(1); };
+if (src.includes("denied")) fail("GET https://ghcr.io/v2/x: UNAUTHORIZED: authentication required");
+if (src.includes("notfound")) fail("MANIFEST_UNKNOWN: manifest unknown");
+if (src.includes("ratelimit")) fail("toomanyrequests: You have reached your unauthenticated pull rate limit");
+if (src.includes("slow")) { setTimeout(() => {}, 60_000); } else if (src.includes("blocked")) {
+  const [host, port] = new URL(process.env.HTTPS_PROXY).host.split(":");
+  const s = net.connect(Number(port), host, () => s.write("CONNECT evil.example.com:443 HTTP/1.1\r\nHost: evil.example.com:443\r\n\r\n"));
+  s.on("data", (d) => { s.destroy(); fail(`proxyconnect: ${String(d).split("\r\n")[0]}`); });
+} else if (src.includes("huge")) {
+  writeFileSync(out, "x".repeat(5000)); process.exit(0);
+} else {
+  writeFileSync(out, JSON.stringify({ artifacts: [{ name: "openssl", version: "1.1" }], source: { target: src } }));
+}

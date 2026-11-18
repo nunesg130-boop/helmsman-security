@@ -1,0 +1,22 @@
+[Unit]
+Description=Container image scanner for helmsman-security (Grype + Syft)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=hs-grype
+Group=hs-grype
+ExecStart=/usr/bin/node --no-warnings /opt/helmsman-security/src/images/worker-main.mjs
+Restart=on-failure
+RestartSec=30
+Nice=10
+MemoryMax=1536M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/hs-grype
+InaccessiblePaths=/var/lib/helmsman-security /etc/helmsman-security
+
+[Install]
+WantedBy=multi-user.target
