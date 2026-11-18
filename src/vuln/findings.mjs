@@ -85,12 +85,13 @@ export class FindingStore {
     return { kev: this.#fresh("kev", now, maxFeedAgeMs), epss: this.#fresh("epss", now, maxFeedAgeMs) };
   }
 
-  list({ assetKey, cve, pkgName, pkgVersion, kev, fixState, severity, limit = 100, offset = 0 } = {}, { now, maxFeedAgeMs }) {
+  list({ assetKey, source, cve, pkgName, pkgVersion, kev, fixState, severity, limit = 100, offset = 0 } = {}, { now, maxFeedAgeMs }) {
     const kevFresh = this.#fresh("kev", now, maxFeedAgeMs);
     const epssFresh = this.#fresh("epss", now, maxFeedAgeMs);
     const where = ["f.tenant_id = ?"];
     const params = [this.tenantId];
     if (assetKey) { where.push("f.asset_key = ?"); params.push(assetKey); }
+    if (source) { where.push("f.source = ?"); params.push(source); }
     if (cve) { where.push("f.cve = ?"); params.push(cve); }
     if (pkgName) { where.push("f.pkg_name = ?"); params.push(pkgName); }
     if (pkgVersion != null) { where.push("f.pkg_version = ?"); params.push(String(pkgVersion)); }
@@ -125,17 +126,18 @@ export class FindingStore {
   summaryByAsset({ now, maxFeedAgeMs }) {
     const kevFresh = this.#fresh("kev", now, maxFeedAgeMs);
     const rows = this.db.prepare(
-      `SELECT f.asset_key, f.severity, f.fix_state, f.low_confidence, f.recognised_condition, (k.cve IS NOT NULL) AS is_kev, COUNT(*) AS n
+      `SELECT f.asset_key, f.source, f.severity, f.fix_state, f.low_confidence, f.recognised_condition, (k.cve IS NOT NULL) AS is_kev, COUNT(*) AS n
        FROM findings f LEFT JOIN kev k ON k.tenant_id = f.tenant_id AND k.cve = f.cve
-       WHERE f.tenant_id = ? GROUP BY f.asset_key, f.severity, f.fix_state, f.low_confidence, f.recognised_condition, is_kev`
+       WHERE f.tenant_id = ? GROUP BY f.asset_key, f.source, f.severity, f.fix_state, f.low_confidence, f.recognised_condition, is_kev`
     ).all(this.tenantId);
     const out = new Map();
     for (const r of rows) {
       if (!out.has(r.asset_key)) {
-        out.set(r.asset_key, { assetKey: r.asset_key, total: 0, critical: 0, high: 0, medium: 0, low: 0, unknownSeverity: 0, fixAvailable: 0, noFix: 0, fixUnknown: 0, kev: kevFresh ? 0 : null, lowConfidence: 0, unrecognisedCondition: 0 });
+        out.set(r.asset_key, { assetKey: r.asset_key, total: 0, critical: 0, high: 0, medium: 0, low: 0, unknownSeverity: 0, fixAvailable: 0, noFix: 0, fixUnknown: 0, kev: kevFresh ? 0 : null, lowConfidence: 0, unrecognisedCondition: 0, hostFindings: 0, imageFindings: 0 });
       }
       const a = out.get(r.asset_key);
       a.total += r.n;
+      a[r.source === "grype" ? "imageFindings" : "hostFindings"] += r.n;
       a[r.severity === "unknown" ? "unknownSeverity" : r.severity] += r.n;
       a[FIX_COLUMNS[r.fix_state]] += r.n;
       if (r.low_confidence) a.lowConfidence += r.n;
@@ -144,4 +146,23 @@ export class FindingStore {
     }
     return [...out.values()].sort((x, y) => y.total - x.total || x.assetKey.localeCompare(y.assetKey));
   }
+}
+
+// Finding counts per (asset, container) for container images.
+export function imageCounts(db, tenantId, { kevFresh }) {
+  const rows = db.prepare(
+    `SELECT f.asset_key, f.container, f.severity, (k.cve IS NOT NULL) AS is_kev, COUNT(*) AS n
+     FROM findings f LEFT JOIN kev k ON k.tenant_id = f.tenant_id AND k.cve = f.cve
+     WHERE f.tenant_id = ? AND f.source = 'grype' GROUP BY f.asset_key, f.container, f.severity, is_kev`
+  ).all(tenantId);
+  const out = new Map();
+  for (const r of rows) {
+    const key = `${r.asset_key}\u0000${r.container}`;
+    if (!out.has(key)) out.set(key, { total: 0, critical: 0, high: 0, kev: kevFresh ? 0 : null });
+    const c = out.get(key);
+    c.total += r.n;
+    if (r.severity === "critical" || r.severity === "high") c[r.severity] += r.n;
+    if (kevFresh && r.is_kev) c.kev += r.n;
+  }
+  return (assetKey, container) => out.get(`${assetKey}\u0000${container}`) ?? { total: 0, critical: 0, high: 0, kev: kevFresh ? 0 : null };
 }

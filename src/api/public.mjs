@@ -2,8 +2,9 @@ import https from "node:https";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { LedgerStore } from "../ledger.mjs";
 import { evidenceKey } from "../checks/runner.mjs";
-import { FindingStore } from "../vuln/findings.mjs";
+import { FindingStore, imageCounts } from "../vuln/findings.mjs";
 import { VULN_COLLECTOR } from "../vuln/cycle.mjs";
+import { IMAGES_COLLECTOR } from "../images/cycle.mjs";
 import { HoldStore } from "../holds.mjs";
 import { annotateFindings, readExposureMap } from "../vuln/annotate.mjs";
 import { postureScore, SCORE_RULES } from "../vuln/score.mjs";
@@ -32,7 +33,7 @@ function paginate(items, url) {
   return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: items.length };
 }
 
-export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, vulnStaleAfterMs = 3 * 3600_000, maxFeedAgeMs = 7 * 86400_000, exposureConfigured = false, now = Date.now }) {
+export function createPublicServer({ db, tenantId, store, credentials, tls, host, port, version, staleAfterMs = 45 * 60_000, vulnStaleAfterMs = 3 * 3600_000, maxFeedAgeMs = 7 * 86400_000, exposureConfigured = false, imagesConfigured = false, now = Date.now }) {
   const ledger = new LedgerStore(db, tenantId);
   const findings = new FindingStore(db, tenantId);
   const holds = new HoldStore(db, tenantId);
@@ -120,6 +121,8 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       const fix = q.get("fix");
       const severity = q.get("severity");
       const kev = q.get("kev");
+      const source = q.get("source");
+      if (source && source !== "wazuh" && source !== "grype") return [400, { error: "source must be wazuh or grype" }];
       if (fix && !FIX_STATES.has(fix)) return [400, { error: "fix must be fix-available-not-applied, no-fix-exists or unknown" }];
       if (severity && !SEVERITIES.has(severity)) return [400, { error: "severity must be critical, high, medium, low or unknown" }];
       if (kev && kev !== "true" && kev !== "false") return [400, { error: "kev must be true or false" }];
@@ -138,7 +141,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
       if (urgent === "true" && meta.kevStale) return [409, { error: "the KEV list is missing or out of date, so the urgent list would be incomplete", exposureStatus: exposure.status, ...meta }];
       const limit = Math.max(1, intParam(url, "limit", 50, 200));
       const offset = intParam(url, "offset", 0, Number.MAX_SAFE_INTEGER);
-      const filters = { assetKey: q.get("asset") || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined };
+      const filters = { assetKey: q.get("asset") || undefined, source: source || undefined, kev: kev ? kev === "true" : undefined, fixState: fix || undefined, severity: severity || undefined };
       const names = assetNames();
       const named = (list) => list.map((i) => ({ ...i, assetName: names.get(i.assetKey) ?? i.assetKey }));
       const annotate = (list) => annotateFindings(list, { map: exposure.map, holds, now: t });
@@ -154,7 +157,7 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
     "/api/v1/vulnerabilities/summary": () => {
       const names = assetNames();
       const assets = findings.summaryByAsset({ now: now(), maxFeedAgeMs }).map((a) => ({ ...a, assetName: names.get(a.assetKey) ?? a.assetKey }));
-      const totals = { total: 0, critical: 0, high: 0, medium: 0, low: 0, unknownSeverity: 0, fixAvailable: 0, noFix: 0, fixUnknown: 0, lowConfidence: 0, unrecognisedCondition: 0 };
+      const totals = { total: 0, critical: 0, high: 0, medium: 0, low: 0, unknownSeverity: 0, fixAvailable: 0, noFix: 0, fixUnknown: 0, lowConfidence: 0, unrecognisedCondition: 0, hostFindings: 0, imageFindings: 0 };
       for (const a of assets) for (const k of Object.keys(totals)) totals[k] += a[k];
       const meta = vulnMeta();
       totals.kev = meta.kevStale ? null : assets.reduce((n, a) => n + (a.kev ?? 0), 0);
@@ -178,6 +181,21 @@ export function createPublicServer({ db, tenantId, store, credentials, tls, host
         router: map.router ?? null,
         declaredAddresses: Object.entries(map.declaredAddresses ?? {}).map(([assetKey, ips]) => ({ assetKey, assetName: name(assetKey), ips }))
       }];
+    },
+    "/api/v1/images": () => {
+      const t = now();
+      const run = store.lastRun(IMAGES_COLLECTOR);
+      const collection = { status: run?.status ?? "never_run", lastSuccessAt: run?.lastSuccessAt ?? null, lastError: run?.status === "failed" ? run.error : null };
+      const dbEv = store.get(GLOBAL_KEY, "grype.db");
+      if (!dbEv) return [200, { configured: imagesConfigured, collection, db: null, hosts: null }];
+      const counts = imageCounts(db, tenantId, { kevFresh: findings.freshness({ now: t, maxFeedAgeMs }).kev });
+      const fresh = (ev) => ev && t - ev.collectedAt <= ev.staleAfterMs && ev.collectedAt <= t + 60_000;
+      const hosts = db.prepare("SELECT asset_key, name FROM assets WHERE tenant_id = ? ORDER BY name").all(tenantId).map((a) => ({ a, ev: store.get(a.asset_key, "grype.images") })).filter(({ ev }) => ev)
+        .map(({ a, ev }) => ({
+          assetKey: a.asset_key, assetName: a.name, listing: fresh(ev) ? ev.value.listing : "stale", collectedAt: ev.collectedAt,
+          images: ev.value.images.map((i) => ({ ...i, counts: counts(a.asset_key, i.container) }))
+        }));
+      return [200, { configured: imagesConfigured, collection, db: { ...dbEv.value, stale: dbEv.value.stale || !fresh(dbEv), collectedAt: dbEv.collectedAt }, hosts }];
     },
     "/api/v1/posture": () => {
       const t = now();

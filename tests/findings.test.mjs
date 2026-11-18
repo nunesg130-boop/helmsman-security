@@ -88,7 +88,7 @@ test("summaryByAsset counts severities, fix states and KEV per asset", () => {
   s.replaceKev(kevRows(1, [{ cve: "CVE-2", dateAdded: "2026-01-01", ransomware: false }]), 1000);
   s.replaceEpss([{ cve: "CVE-1", score: 0.5, percentile: 0.5 }], 1000);
   const rows = s.summaryByAsset(AGE);
-  assert.deepEqual(rows.find((r) => r.assetKey === "pve:guest:100"), { assetKey: "pve:guest:100", total: 4, critical: 1, high: 1, medium: 1, low: 0, unknownSeverity: 1, fixAvailable: 2, noFix: 1, fixUnknown: 1, kev: 1, lowConfidence: 1, unrecognisedCondition: 1 });
+  assert.deepEqual(rows.find((r) => r.assetKey === "pve:guest:100"), { assetKey: "pve:guest:100", total: 4, critical: 1, high: 1, medium: 1, low: 0, unknownSeverity: 1, fixAvailable: 2, noFix: 1, fixUnknown: 1, kev: 1, lowConfidence: 1, unrecognisedCondition: 1, hostFindings: 4, imageFindings: 0 });
   assert.equal(s.summaryByAsset({ now: 5000, maxFeedAgeMs: 10 })[0].kev, null);
 });
 

@@ -1,7 +1,7 @@
 // End-to-end smoke test: real engine, fake Proxmox / Wazuh / Docker /
 // endoflife.date servers. One EOL refresh + one collection cycle, then the
 // public API must report ok, issue and unknown results and healthy collectors.
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, copyFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, copyFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -22,7 +22,12 @@ const PRODUCTS = ["debian", "ubuntu", "proxmox-ve", "macos", "fedora", "docker-e
 const pve = await startFixtureServer(proxmoxRoutes());
 const wz = await startFixtureServer(wazuhRoutes());
 const eol = await startFixtureServer(Object.fromEntries(PRODUCTS.map((p) => [`/api/v1/products/${p}`, eolFixture(p)])));
-const docker = await startFixtureServer({ "/containers/json": [{ Names: ["/sonarr"], Image: "sonarr", State: "running", Ports: [] }], "/images/json": [], "/version": { Version: "27.3.1", ApiVersion: "1.47" } }, { tls: false });
+const SONARR = `sha256:${"5".repeat(64)}`;
+const docker = await startFixtureServer({
+  "/containers/json": [{ Names: ["/sonarr"], Image: "lscr.io/linuxserver/sonarr:latest", ImageID: "sha256:s1", State: "running", Ports: [] }, { Names: ["/site"], Image: "my-site", ImageID: "sha256:m1", State: "running", Ports: [] }],
+  "/images/json": [{ Id: "sha256:s1", RepoTags: ["lscr.io/linuxserver/sonarr:latest"], RepoDigests: [`lscr.io/linuxserver/sonarr@${SONARR}`] }, { Id: "sha256:m1", RepoTags: ["my-site:latest"], RepoDigests: [] }],
+  "/version": { Version: "27.3.1", ApiVersion: "1.47" }
+}, { tls: false });
 
 const ix = await startFixtureServer({
   ...indexerRoutes([vulnDoc({ agent: "001", name: "norco", cve: "CVE-2024-1000" }), vulnDoc({ agent: "001", name: "norco", cve: "CVE-2024-2000", condition: "Package default status" })]),
@@ -40,6 +45,13 @@ const caddy = await startFixtureServer({ "/shape.json": { version: 2, generatedA
 const cf = await startFixtureServer(cloudflareRoutes({ ingress: [{ service: "http_status:404" }], dns: [{ name: "pve.example.com" }] }));
 
 const dir = mkdtempSync(join(tmpdir(), "hs-smoke-"));
+// What the scanner worker would have written: a current database and one scanned image.
+const imagesSpool = join(dir, "spool"), imagesOut = join(dir, "out");
+mkdirSync(imagesSpool); mkdirSync(imagesOut);
+const GRYPE_BUILT = new Date(T * 1000 - 3600_000).toISOString();
+writeFileSync(join(imagesOut, "db.json"), JSON.stringify({ v: 1, status: "ok", built: GRYPE_BUILT, checkedAt: T * 1000 }));
+writeFileSync(join(imagesOut, `scan-${SONARR.replace(":", "-")}.json`), JSON.stringify({ v: 1, digest: SONARR, status: "scanned", reason: null, dbBuilt: GRYPE_BUILT, scannedAt: T * 1000 - 60_000,
+  matches: [{ id: "CVE-2024-3000", relatedCves: [], severity: "Critical", cvss: 9.1, fixState: "fixed", fixVersions: ["2"], pkg: { name: "libfoo", version: "1", type: "deb" }, matchType: "exact-direct-match" }] }));
 const key = join(dir, "master.key");
 writeFileSync(key, randomBytes(32).toString("hex"));
 chmodSync(key, 0o600);
@@ -54,6 +66,7 @@ writeFileSync(join(dir, "config.json"), JSON.stringify({
   docker: [{ name: "docker-vm", baseUrl: docker.url, assetKey: "pve:guest:109" }],
   assets: { roaming: ["legion"], appliances: [] },
   network: [{ name: "er605", ip: "192.168.0.1", portForwards: [{ wanPort: 443, lanIp: "192.168.0.114", lanPort: 443, protocol: "tcp" }], upnp: false, dmz: false, ipv6Inbound: false }],
+  images: { enabled: true, spoolDir: imagesSpool, outDir: imagesOut },
   exposure: { caddy: { url: `${caddy.url}/shape.json`, assetKey: "pve:guest:114", address: "192.168.0.114" }, cloudflare: { accountId: "acc", zoneId: "zone", tunnelIds: ["t1"], assetKey: "pve:guest:109", connectorAddress: "192.168.0.109" }, expectedPrivate: [] },
   eol: { products: PRODUCTS }
 }));
@@ -79,7 +92,8 @@ try {
   await engine.collect();
   await engine.refreshFeeds();
   await engine.collectVulns();
-  await engine.collect(); // re-evaluate with the vulnerability evidence in place
+  await engine.collectImages();
+  await engine.collect(); // re-evaluate with the vulnerability and image evidence in place
   const api = (path) => new Promise((resolve, reject) => {
     https.get({ host: "127.0.0.1", port: engine.apiPort, path, rejectUnauthorized: false, headers: { authorization: `Bearer ${token}` } }, (res) => {
       let b = ""; res.on("data", (d) => { b += d; }); res.on("end", () => resolve(JSON.parse(b)));
@@ -87,7 +101,7 @@ try {
   });
   const summary = await api("/api/v1/summary");
   const vulns = await api("/api/v1/vulnerabilities/summary");
-  check(vulns.totals.total === 2 && vulns.totals.kev === 1 && vulns.totals.fixAvailable === 1 && vulns.totals.noFix === 1, "vulnerabilities read, with KEV and fix state");
+  check(vulns.totals.hostFindings === 2 && vulns.totals.imageFindings === 1 && vulns.totals.kev === 1 && vulns.totals.fixAvailable === 2 && vulns.totals.noFix === 1, "vulnerabilities read, with KEV and fix state");
   check(vulns.findingsStale === false && vulns.threatDataStale === false, "vulnerability data is current");
   const unknowns = await api("/api/v1/unknowns?pageSize=200");
   check(unknowns.items.some((u) => u.checkId === "vuln_coverage_host" && /can't tell 'clean' from 'not scanned'/u.test(u.reason)), "a machine with no vulnerability records is unknown, not clean");
@@ -96,6 +110,11 @@ try {
   check(exposure.status === "ok" && exposure.sources.caddy === "ok" && exposure.sources.cloudflare === "ok", "exposure map built from Caddy, Cloudflare and the declared router");
   check(pveRoute?.exposure === "internet" && pveRoute.assetKey === "pve:node:norco" && pveRoute.listening === true && pveRoute.process === "pveproxy", "a public route resolves to its machine and listening process");
   check(exposure.problems?.some((p) => p.kind === "dangling_route" && p.hostname === "gone.example.com"), "a route to a port nothing listens on is reported");
+  const images = await api("/api/v1/images");
+  const imgs = images.hosts?.flatMap((h) => h.images) ?? [];
+  check(imgs.find((i) => i.container === "sonarr")?.status === "scanned" && imgs.find((i) => i.container === "site")?.status === "local", "container images: one scanned, one built locally");
+  check((await api("/api/v1/vulnerabilities?source=grype")).items.some((i) => i.container === "sonarr" && i.cve === "CVE-2024-3000"), "image findings are filed with their container");
+  check(existsSync(join(imagesSpool, `req-${SONARR.replace(":", "-")}.json`)), "a scan request is queued for the registry image");
   const urgent = await api("/api/v1/vulnerabilities?urgent=true");
   check(urgent.total === 1 && urgent.items[0].cve === "CVE-2024-1000" && urgent.items[0].exposure === "host", "an actively exploited flaw on an internet-reachable machine is urgent");
   const posture = await api("/api/v1/posture");
@@ -113,7 +132,7 @@ try {
     child.stdout.on("data", (d) => { out += d; }); child.stderr.on("data", (d) => { out += d; });
     child.on("close", (status) => resolve({ status, out }));
   });
-  check(report.status === 0 && ["=== PUBLIC ROUTES ===", "=== ROUTE PROBLEMS ===", "=== URGENT ===", "=== POSSIBLY URGENT ===", "POSTURE "].every((h) => report.out.includes(h)) && /pve\.example\.com \| \* \| internet/u.test(report.out), "hs-report prints routes, problems, urgency and posture");
+  check(report.status === 0 && ["=== PUBLIC ROUTES ===", "=== ROUTE PROBLEMS ===", "=== URGENT ===", "=== POSSIBLY URGENT ===", "=== CONTAINER IMAGES ===", "POSTURE "].every((h) => report.out.includes(h)) && /pve\.example\.com \| \* \| internet/u.test(report.out), "hs-report prints routes, problems, urgency and posture");
   if (report.status !== 0 || process.env.HS_SMOKE_SHOW_REPORT) console.log(report.out);
   console.log(JSON.stringify(summary.counts), "roamingAway", summary.roamingAway);
   check(eolRun.status === "ok" || summary.collectors.find((c) => c.name === "eol")?.status === "ok", "EOL refresh succeeded");

@@ -93,7 +93,10 @@ try {
       const order = { internet: 0, unknown: 1, lan: 2 };
       const entryName = { forward: "router->Caddy", "tunnel-via-caddy": "tunnel->Caddy", "tunnel-direct": "tunnel" };
       const gateName = (g) => (g === "unknown" ? "UNVERIFIED" : g);
-      for (const s of [...ex.services].sort((a, b) => order[a.exposure] - order[b.exposure] || a.hostname.localeCompare(b.hostname) || String(a.path).localeCompare(String(b.path)))) {
+      // Entries that differ only by their address condition print once.
+      const seen = new Set();
+      const rowsToPrint = [...ex.services].filter((s) => { const k = `${s.hostname}|${s.path}|${s.upstream}|${s.exposure}|${s.gate}`; if (seen.has(k)) return false; seen.add(k); return true; });
+      for (const s of rowsToPrint.sort((a, b) => order[a.exposure] - order[b.exposure] || a.hostname.localeCompare(b.hostname) || String(a.path).localeCompare(String(b.path)))) {
         const live = s.paths.filter((p) => p.reachable !== false);
         const paths = s.paths.length ? s.paths.map((p) => `${entryName[p.entry] ?? p.entry}${p.reachable === true ? "" : p.reachable === false ? " (blocked)" : " (unknown)"}`).join(", ") : "none";
         const differ = new Set(live.map((p) => p.gate)).size > 1;
@@ -114,7 +117,7 @@ try {
         if (items.length >= r.total || r.items.length === 0) return items;
       }
     };
-    const row = (k) => `${k.assetName} | ${k.cve} | ${k.pkg.name} ${k.pkg.version} | ${k.urgencyWhy}`;
+    const row = (k) => `${k.assetName}${k.container ? ` [${k.container}]` : ""} | ${k.cve} | ${k.pkg.name} ${k.pkg.version} | ${k.urgencyWhy}`;
     const MAX_LINES = 60;
     const print = (items, extra = () => "") => {
       for (const k of items.slice(0, MAX_LINES)) console.log(row(k) + extra(k));
@@ -133,6 +136,23 @@ try {
       return why.length ? ` | uncertain: ${why.join("; ")}` : "";
     };
     print(await listed("possiblyUrgent=true"), uncertain);
+
+    const im = await get("/api/v1/images");
+    if (im.configured) {
+      console.log("=== CONTAINER IMAGES ===");
+      if (!im.db) console.log(`UNKNOWN: no image results yet (collection ${im.collection.status}${im.collection.lastError ? `: ${im.collection.lastError}` : ""}). This is not 'no vulnerabilities'.`);
+      else {
+        console.log(`scanner database: ${im.db.built ?? "none"}${im.db.stale ? " (OUT OF DATE: image results are unknown)" : ""}${im.db.status !== "ok" ? ` [${im.db.status}${im.db.reason ? `: ${im.db.reason}` : ""}]` : ""}`);
+        console.log("machine | container | image | status | findings (critical/high) | KEV");
+        for (const h of im.hosts) {
+          if (h.listing !== "ok") console.log(`${h.assetName} | - | - | container list ${h.listing} | - | -`);
+          for (const i of h.images) {
+            const status = i.status === "scanned" ? "scanned" : `${i.status.toUpperCase()}: ${i.reason}`;
+            console.log(`${h.assetName} | ${i.container} | ${i.imageRef} | ${status} | ${i.counts.total} (${i.counts.critical}/${i.counts.high}) | ${i.counts.kev ?? "unknown"}`);
+          }
+        }
+      }
+    }
 
     const p = await get("/api/v1/posture");
     if (p.state === "scored") console.log(`POSTURE ${p.confirmed} based on confirmed findings; ${p.pessimistic} in the pessimistic case (rules v${p.rules.score})`);
